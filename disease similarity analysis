@@ -1,0 +1,803 @@
+# ============================================================
+# DISEASE SIMILARITY ANALYSIS
+# ============================================================
+
+import os
+import itertools
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# INPUT FILES
+# ============================================================
+
+disease_files = {
+    "Autism": "ASD_DESeq2_full_results.csv",
+    "Colorectal neoplasm": "colorectal neoplasm DESeq2_full_results.csv",
+    "Dwarfism": "dwarfism_results.csv",
+    "Ulcerative colitis": "ulcerative colitis deseq2_results.csv",
+    "Fibromyalgia": "fibromyalgia deseq2_results.csv",
+    "IBS": "IBS_full_DESeq2_results.csv",
+    "Fatigue": "fatigue all_results.csv",
+    "Obesity": "obesity_full_DESeq2_results.csv",
+    "Neuroblastoma": "Neuroblastoma_full_DESeq2_results.csv",
+    "COVID-19": "covid Full_DESeq2_results.csv"
+}
+
+
+# ============================================================
+# OUTPUT DIRECTORY
+# ============================================================
+
+OUTPUT_DIR = "Disease_Similarity_Results"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+# ============================================================
+# FUNCTION TO DETECT MICROBIAL SPECIES COLUMN
+# ============================================================
+
+def detect_microbe_column(df):
+
+    preferred_columns = [
+        "microbe",
+        "species",
+        "taxon",
+        "Unnamed: 0"
+    ]
+
+    for column in preferred_columns:
+        if column in df.columns:
+            return column
+
+    raise ValueError(
+        "Microbial species column could not be detected."
+    )
+
+
+# ============================================================
+# PREPARE DESEQ2 DATA AND GENERATE TOP 100 MICROBES
+# ============================================================
+
+case_tables = {}
+control_tables = {}
+lfc_tables = {}
+
+validation_rows = []
+
+
+for disease, file_name in disease_files.items():
+
+    print("\n" + "=" * 80)
+    print(disease)
+    print("=" * 80)
+
+    df = pd.read_csv(file_name)
+
+    microbe_column = detect_microbe_column(df)
+
+    df = df.rename(
+        columns={microbe_column: "microbe"}
+    )
+
+    required_columns = [
+        "microbe",
+        "baseMean",
+        "log2FoldChange",
+        "lfcSE"
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            f"{disease}: missing columns {missing_columns}"
+        )
+
+    df = df[
+        required_columns
+    ].copy()
+
+    df["microbe"] = (
+        df["microbe"]
+        .astype(str)
+        .str.strip()
+    )
+
+    df["baseMean"] = pd.to_numeric(
+        df["baseMean"],
+        errors="coerce"
+    )
+
+    df["log2FoldChange"] = pd.to_numeric(
+        df["log2FoldChange"],
+        errors="coerce"
+    )
+
+    df["lfcSE"] = pd.to_numeric(
+        df["lfcSE"],
+        errors="coerce"
+    )
+
+    df = df.dropna(
+        subset=[
+            "microbe",
+            "log2FoldChange",
+            "lfcSE"
+        ]
+    )
+
+    df = df.drop_duplicates(
+        subset="microbe"
+    )
+
+    df["disease"] = disease
+
+
+    # --------------------------------------------------------
+    # 90% CONFIDENCE LIMITS
+    # 5th and 95th percentile limits
+    # --------------------------------------------------------
+
+    Z_VALUE = 1.645
+
+    df["LFC_5CI"] = (
+        df["log2FoldChange"]
+        - Z_VALUE * df["lfcSE"]
+    )
+
+    df["LFC_95CI"] = (
+        df["log2FoldChange"]
+        + Z_VALUE * df["lfcSE"]
+    )
+
+
+    # --------------------------------------------------------
+    # CASE-ASSOCIATED MICROBES
+    # Ranked using lower confidence limit
+    # --------------------------------------------------------
+
+    case_top100 = (
+        df
+        .sort_values(
+            "LFC_5CI",
+            ascending=False
+        )
+        .head(100)
+        .copy()
+    )
+
+    case_top100["case_rank"] = np.arange(
+        1,
+        len(case_top100) + 1
+    )
+
+
+    # --------------------------------------------------------
+    # CONTROL-ASSOCIATED MICROBES
+    # Ranked using upper confidence limit
+    # --------------------------------------------------------
+
+    control_top100 = (
+        df
+        .sort_values(
+            "LFC_95CI",
+            ascending=True
+        )
+        .head(100)
+        .copy()
+    )
+
+    control_top100["control_rank"] = np.arange(
+        1,
+        len(control_top100) + 1
+    )
+
+
+    # --------------------------------------------------------
+    # STORE TABLES
+    # --------------------------------------------------------
+
+    case_tables[disease] = case_top100
+
+    control_tables[disease] = control_top100
+
+    lfc_tables[disease] = (
+        df
+        .set_index("microbe")[
+            "log2FoldChange"
+        ]
+    )
+
+
+    # --------------------------------------------------------
+    # SAVE TOP 100 FILES
+    # --------------------------------------------------------
+
+    safe_name = (
+        disease
+        .replace(" ", "_")
+        .replace("-", "_")
+    )
+
+    case_top100.to_csv(
+        os.path.join(
+            OUTPUT_DIR,
+            f"{safe_name}_Top100_Case.csv"
+        ),
+        index=False
+    )
+
+    control_top100.to_csv(
+        os.path.join(
+            OUTPUT_DIR,
+            f"{safe_name}_Top100_Control.csv"
+        ),
+        index=False
+    )
+
+
+    validation_rows.append(
+        {
+            "Disease": disease,
+            "Total_DESeq2_species": len(df),
+            "Case_top100": len(case_top100),
+            "Control_top100": len(control_top100)
+        }
+    )
+
+    print(
+        "DESeq2 species:",
+        len(df)
+    )
+
+    print(
+        "Case-associated species:",
+        len(case_top100)
+    )
+
+    print(
+        "Control-associated species:",
+        len(control_top100)
+    )
+
+
+# ============================================================
+# SAVE VALIDATION TABLE
+# ============================================================
+
+validation_df = pd.DataFrame(
+    validation_rows
+)
+
+validation_df.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Top100_Validation.csv"
+    ),
+    index=False
+)
+
+
+# ============================================================
+# DISEASE PAIR OVERLAP ANALYSIS
+# ============================================================
+
+diseases = list(
+    disease_files.keys()
+)
+
+pair_results = []
+
+
+for disease_1, disease_2 in itertools.combinations(
+    diseases,
+    2
+):
+
+    case_set_1 = set(
+        case_tables[disease_1]["microbe"]
+    )
+
+    case_set_2 = set(
+        case_tables[disease_2]["microbe"]
+    )
+
+    control_set_1 = set(
+        control_tables[disease_1]["microbe"]
+    )
+
+    control_set_2 = set(
+        control_tables[disease_2]["microbe"]
+    )
+
+
+    shared_case = sorted(
+        case_set_1.intersection(
+            case_set_2
+        )
+    )
+
+    shared_control = sorted(
+        control_set_1.intersection(
+            control_set_2
+        )
+    )
+
+
+    pair_results.append(
+        {
+            "Disease_1": disease_1,
+            "Disease_2": disease_2,
+            "Case_overlap": len(shared_case),
+            "Control_overlap": len(shared_control),
+            "Total_overlap":
+                len(shared_case)
+                + len(shared_control),
+            "Shared_case_microbes":
+                "; ".join(shared_case),
+            "Shared_control_microbes":
+                "; ".join(shared_control)
+        }
+    )
+
+
+pair_df = pd.DataFrame(
+    pair_results
+)
+
+pair_df = pair_df.sort_values(
+    "Total_overlap",
+    ascending=False
+)
+
+pair_df.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Final_Top100_Disease_Pair_Overlap.csv"
+    ),
+    index=False
+)
+
+
+# ============================================================
+# CASE AND CONTROL OVERLAP MATRICES
+# ============================================================
+
+case_overlap_matrix = pd.DataFrame(
+    0,
+    index=diseases,
+    columns=diseases
+)
+
+control_overlap_matrix = pd.DataFrame(
+    0,
+    index=diseases,
+    columns=diseases
+)
+
+
+for disease_1 in diseases:
+
+    for disease_2 in diseases:
+
+        case_set_1 = set(
+            case_tables[disease_1]["microbe"]
+        )
+
+        case_set_2 = set(
+            case_tables[disease_2]["microbe"]
+        )
+
+        control_set_1 = set(
+            control_tables[disease_1]["microbe"]
+        )
+
+        control_set_2 = set(
+            control_tables[disease_2]["microbe"]
+        )
+
+
+        case_overlap_matrix.loc[
+            disease_1,
+            disease_2
+        ] = len(
+            case_set_1.intersection(
+                case_set_2
+            )
+        )
+
+
+        control_overlap_matrix.loc[
+            disease_1,
+            disease_2
+        ] = len(
+            control_set_1.intersection(
+                control_set_2
+            )
+        )
+
+
+case_overlap_matrix.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Top100_Case_Overlap_Matrix.csv"
+    )
+)
+
+control_overlap_matrix.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Top100_Control_Overlap_Matrix.csv"
+    )
+)
+
+
+# ============================================================
+# PLOT OVERLAP HEATMAP FUNCTION
+# ============================================================
+
+def plot_overlap_heatmap(
+    matrix,
+    title,
+    output_file
+):
+
+    fig, ax = plt.subplots(
+        figsize=(12, 10)
+    )
+
+    image = ax.imshow(
+        matrix.values,
+        aspect="auto"
+    )
+
+    ax.set_xticks(
+        np.arange(
+            len(matrix.columns)
+        )
+    )
+
+    ax.set_yticks(
+        np.arange(
+            len(matrix.index)
+        )
+    )
+
+    ax.set_xticklabels(
+        matrix.columns,
+        rotation=55,
+        ha="right"
+    )
+
+    ax.set_yticklabels(
+        matrix.index
+    )
+
+    for i in range(
+        len(matrix.index)
+    ):
+
+        for j in range(
+            len(matrix.columns)
+        ):
+
+            ax.text(
+                j,
+                i,
+                int(
+                    matrix.iloc[i, j]
+                ),
+                ha="center",
+                va="center"
+            )
+
+    ax.set_title(
+        title
+    )
+
+    fig.colorbar(
+        image,
+        ax=ax
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        output_file,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+
+plot_overlap_heatmap(
+    case_overlap_matrix,
+    "Overlap of top 100 case-associated microbial species",
+    os.path.join(
+        OUTPUT_DIR,
+        "Case_Associated_Overlap.png"
+    )
+)
+
+plot_overlap_heatmap(
+    control_overlap_matrix,
+    "Overlap of top 100 control-associated microbial species",
+    os.path.join(
+        OUTPUT_DIR,
+        "Control_Associated_Overlap.png"
+    )
+)
+
+
+# ============================================================
+# MICROBES SHARED BY MORE THAN TWO DISEASES
+# ============================================================
+
+def identify_shared_microbes(
+    ranked_tables,
+    rank_column
+):
+
+    microbial_diseases = {}
+
+    for disease, table in ranked_tables.items():
+
+        for microbe in table["microbe"]:
+
+            microbial_diseases.setdefault(
+                microbe,
+                []
+            )
+
+            microbial_diseases[
+                microbe
+            ].append(
+                disease
+            )
+
+
+    rows = []
+
+    for microbe, disease_list in microbial_diseases.items():
+
+        if len(disease_list) > 2:
+
+            rows.append(
+                {
+                    "microbe": microbe,
+                    "number_of_diseases":
+                        len(disease_list),
+                    "diseases":
+                        "; ".join(
+                            sorted(
+                                disease_list
+                            )
+                        )
+                }
+            )
+
+
+    shared_df = pd.DataFrame(
+        rows
+    )
+
+    shared_df = shared_df.sort_values(
+        [
+            "number_of_diseases",
+            "microbe"
+        ],
+        ascending=[
+            False,
+            True
+        ]
+    )
+
+    return shared_df
+
+
+case_shared = identify_shared_microbes(
+    case_tables,
+    "case_rank"
+)
+
+control_shared = identify_shared_microbes(
+    control_tables,
+    "control_rank"
+)
+
+
+case_shared.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Case_Microbes_Shared_More_Than_Two_Diseases.csv"
+    ),
+    index=False
+)
+
+control_shared.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Control_Microbes_Shared_More_Than_Two_Diseases.csv"
+    ),
+    index=False
+)
+
+
+# ============================================================
+# CREATE LFC MATRICES FOR SHARED MICROBES
+# ============================================================
+
+def create_lfc_matrix(
+    shared_microbes,
+    lfc_tables
+):
+
+    microbes = list(
+        shared_microbes["microbe"]
+    )
+
+    matrix = pd.DataFrame(
+        np.nan,
+        index=diseases,
+        columns=microbes
+    )
+
+
+    for disease in diseases:
+
+        lfc_series = lfc_tables[
+            disease
+        ]
+
+        for microbe in microbes:
+
+            if microbe in lfc_series.index:
+
+                matrix.loc[
+                    disease,
+                    microbe
+                ] = lfc_series.loc[
+                    microbe
+                ]
+
+
+    return matrix
+
+
+case_lfc_matrix = create_lfc_matrix(
+    case_shared,
+    lfc_tables
+)
+
+control_lfc_matrix = create_lfc_matrix(
+    control_shared,
+    lfc_tables
+)
+
+
+case_lfc_matrix.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Figure3e_Case_Shared_Microbes_LFC_Matrix.csv"
+    )
+)
+
+control_lfc_matrix.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Figure3f_Control_Shared_Microbes_LFC_Matrix.csv"
+    )
+)
+
+
+# ============================================================
+# TOP DISEASE PAIRS
+# ============================================================
+
+top10_case_pairs = (
+    pair_df
+    .sort_values(
+        "Case_overlap",
+        ascending=False
+    )
+    .head(10)[
+        [
+            "Disease_1",
+            "Disease_2",
+            "Case_overlap",
+            "Control_overlap",
+            "Total_overlap"
+        ]
+    ]
+)
+
+top10_control_pairs = (
+    pair_df
+    .sort_values(
+        "Control_overlap",
+        ascending=False
+    )
+    .head(10)[
+        [
+            "Disease_1",
+            "Disease_2",
+            "Case_overlap",
+            "Control_overlap",
+            "Total_overlap"
+        ]
+    ]
+)
+
+
+top10_case_pairs.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Top10_Case_Associated_Disease_Pairs.csv"
+    ),
+    index=False
+)
+
+top10_control_pairs.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "Top10_Control_Associated_Disease_Pairs.csv"
+    ),
+    index=False
+)
+
+
+# ============================================================
+# FINAL SUMMARY
+# ============================================================
+
+print("\n" + "=" * 80)
+
+print(
+    "DISEASE SIMILARITY ANALYSIS COMPLETED"
+)
+
+print("=" * 80)
+
+print(
+    "Diseases analysed:",
+    len(diseases)
+)
+
+print(
+    "Disease pairs analysed:",
+    len(pair_df)
+)
+
+print(
+    "Case-associated microbes shared by >2 diseases:",
+    len(case_shared)
+)
+
+print(
+    "Control-associated microbes shared by >2 diseases:",
+    len(control_shared)
+)
+
+print(
+    "\nHighest total microbial overlap:"
+)
+
+print(
+    pair_df[
+        [
+            "Disease_1",
+            "Disease_2",
+            "Case_overlap",
+            "Control_overlap",
+            "Total_overlap"
+        ]
+    ].head(10)
+)
