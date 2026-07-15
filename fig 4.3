@@ -1,0 +1,476 @@
+# ============================================================
+# FIGURE 5
+# COMBINED DISEASE SIMILARITY NETWORK
+# ============================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import networkx as nx
+from matplotlib.lines import Line2D
+
+
+# ============================================================
+# INPUT FILE
+# ============================================================
+
+EDGE_FILE = (
+    "CORRECTED_Figure_5_Network_Edge_Table.csv"
+)
+
+
+# ============================================================
+# LOAD EDGE TABLE
+# ============================================================
+
+edges = pd.read_csv(
+    EDGE_FILE
+)
+
+
+required_columns = [
+    "Disease_1",
+    "Disease_2",
+    "Case_overlap",
+    "Control_overlap",
+    "Total_overlap"
+]
+
+
+missing_columns = [
+    column
+    for column in required_columns
+    if column not in edges.columns
+]
+
+
+if missing_columns:
+
+    raise ValueError(
+        f"Missing required columns: {missing_columns}"
+    )
+
+
+# ============================================================
+# CREATE NETWORK
+# ============================================================
+
+G = nx.Graph()
+
+
+for _, row in edges.iterrows():
+
+    G.add_node(
+        row["Disease_1"]
+    )
+
+    G.add_node(
+        row["Disease_2"]
+    )
+
+
+    G.add_edge(
+        row["Disease_1"],
+        row["Disease_2"],
+        case_overlap=int(
+            row["Case_overlap"]
+        ),
+        control_overlap=int(
+            row["Control_overlap"]
+        ),
+        total_overlap=int(
+            row["Total_overlap"]
+        )
+    )
+
+
+# ============================================================
+# CIRCULAR NODE LAYOUT
+# ============================================================
+
+pos = nx.circular_layout(
+    G
+)
+
+
+# ============================================================
+# CREATE FIGURE
+# ============================================================
+
+fig, ax = plt.subplots(
+    figsize=(16, 16)
+)
+
+
+# ============================================================
+# DRAW NODES
+# ============================================================
+
+nx.draw_networkx_nodes(
+    G,
+    pos,
+    node_size=4200,
+    edgecolors="black",
+    linewidths=1.5,
+    ax=ax
+)
+
+
+nx.draw_networkx_labels(
+    G,
+    pos,
+    font_size=11,
+    font_weight="bold",
+    ax=ax
+)
+
+
+# ============================================================
+# EDGE WIDTH SCALING
+# ============================================================
+
+maximum_overlap = max(
+    edges[
+        [
+            "Case_overlap",
+            "Control_overlap"
+        ]
+    ].max()
+)
+
+
+def scale_width(
+    overlap
+):
+
+    if maximum_overlap == 0:
+        return 0.5
+
+    return (
+        0.5
+        + 5.0
+        * overlap
+        / maximum_overlap
+    )
+
+
+# ============================================================
+# DRAW CASE AND CONTROL EDGES
+# ============================================================
+
+for _, row in edges.iterrows():
+
+    disease_1 = row[
+        "Disease_1"
+    ]
+
+    disease_2 = row[
+        "Disease_2"
+    ]
+
+    case_overlap = int(
+        row["Case_overlap"]
+    )
+
+    control_overlap = int(
+        row["Control_overlap"]
+    )
+
+
+    # --------------------------------------------------------
+    # CASE-ASSOCIATED EDGE
+    # --------------------------------------------------------
+
+    if case_overlap > 0:
+
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            edgelist=[
+                (
+                    disease_1,
+                    disease_2
+                )
+            ],
+            width=scale_width(
+                case_overlap
+            ),
+            alpha=0.55,
+            edge_color="salmon",
+            ax=ax
+        )
+
+
+    # --------------------------------------------------------
+    # CONTROL-ASSOCIATED EDGE
+    # --------------------------------------------------------
+
+    if control_overlap > 0:
+
+        nx.draw_networkx_edges(
+            G,
+            pos,
+            edgelist=[
+                (
+                    disease_1,
+                    disease_2
+                )
+            ],
+            width=scale_width(
+                control_overlap
+            ),
+            alpha=0.55,
+            edge_color="steelblue",
+            ax=ax
+        )
+
+
+# ============================================================
+# EDGE LABEL POSITIONS
+# ============================================================
+
+for _, row in edges.iterrows():
+
+    disease_1 = row[
+        "Disease_1"
+    ]
+
+    disease_2 = row[
+        "Disease_2"
+    ]
+
+    case_overlap = int(
+        row["Case_overlap"]
+    )
+
+    control_overlap = int(
+        row["Control_overlap"]
+    )
+
+
+    x1, y1 = pos[
+        disease_1
+    ]
+
+    x2, y2 = pos[
+        disease_2
+    ]
+
+
+    midpoint_x = (
+        x1 + x2
+    ) / 2
+
+    midpoint_y = (
+        y1 + y2
+    ) / 2
+
+
+    dx = x2 - x1
+
+    dy = y2 - y1
+
+
+    length = np.sqrt(
+        dx ** 2
+        + dy ** 2
+    )
+
+
+    if length == 0:
+        continue
+
+
+    perpendicular_x = (
+        -dy / length
+    )
+
+    perpendicular_y = (
+        dx / length
+    )
+
+
+    offset = 0.025
+
+
+    # Case overlap label
+
+    if case_overlap > 0:
+
+        ax.text(
+            midpoint_x
+            + perpendicular_x * offset,
+            midpoint_y
+            + perpendicular_y * offset,
+            str(case_overlap),
+            fontsize=8,
+            ha="center",
+            va="center"
+        )
+
+
+    # Control overlap label
+
+    if control_overlap > 0:
+
+        ax.text(
+            midpoint_x
+            - perpendicular_x * offset,
+            midpoint_y
+            - perpendicular_y * offset,
+            str(control_overlap),
+            fontsize=8,
+            ha="center",
+            va="center"
+        )
+
+
+# ============================================================
+# LEGEND
+# ============================================================
+
+legend_elements = [
+
+    Line2D(
+        [0],
+        [0],
+        linewidth=4,
+        label="Case-associated microbial overlap",
+        color="salmon"
+    ),
+
+    Line2D(
+        [0],
+        [0],
+        linewidth=4,
+        label="Control-associated microbial overlap",
+        color="steelblue"
+    )
+
+]
+
+
+ax.legend(
+    handles=legend_elements,
+    loc="upper right"
+)
+
+
+# ============================================================
+# TITLE
+# ============================================================
+
+ax.set_title(
+    "Combined Disease Similarity Network Based on Shared Microbial Signatures",
+    fontsize=18,
+    fontweight="bold"
+)
+
+
+ax.axis(
+    "off"
+)
+
+
+plt.tight_layout()
+
+
+# ============================================================
+# SAVE FIGURE
+# ============================================================
+
+plt.savefig(
+    "Figure_5_Disease_Similarity_Network.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.close()
+
+
+# ============================================================
+# NODE TABLE
+# ============================================================
+
+node_rows = []
+
+
+for node in G.nodes():
+
+    case_weight = 0
+
+    control_weight = 0
+
+
+    for neighbour in G.neighbors(
+        node
+    ):
+
+        edge_data = G[
+            node
+        ][
+            neighbour
+        ]
+
+        case_weight += edge_data[
+            "case_overlap"
+        ]
+
+        control_weight += edge_data[
+            "control_overlap"
+        ]
+
+
+    node_rows.append(
+        {
+            "Disease": node,
+            "Degree":
+                G.degree(node),
+            "Case_weighted_degree":
+                case_weight,
+            "Control_weighted_degree":
+                control_weight,
+            "Total_weighted_degree":
+                case_weight
+                + control_weight
+        }
+    )
+
+
+node_table = pd.DataFrame(
+    node_rows
+)
+
+node_table = node_table.sort_values(
+    "Total_weighted_degree",
+    ascending=False
+)
+
+
+node_table.to_csv(
+    "Figure_5_Node_Table.csv",
+    index=False
+)
+
+
+print(
+    "Figure 5 generated."
+)
+
+print(
+    "\nNetwork nodes:",
+    G.number_of_nodes()
+)
+
+print(
+    "Network edges:",
+    G.number_of_edges()
+)
+
+print(
+    "\nNode table:"
+)
+
+print(
+    node_table
+)
