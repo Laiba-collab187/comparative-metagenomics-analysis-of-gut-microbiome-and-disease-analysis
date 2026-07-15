@@ -1,0 +1,710 @@
+# ============================================================
+# COVID-19 DIFFERENTIAL ABUNDANCE ANALYSIS USING DESeq2
+# ============================================================
+
+
+# ============================================================
+# INSTALL AND LOAD REQUIRED PACKAGES
+# ============================================================
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+if (!requireNamespace("DESeq2", quietly = TRUE)) {
+  BiocManager::install("DESeq2", ask = FALSE)
+}
+
+required_packages <- c(
+  "tidyverse",
+  "pheatmap",
+  "RColorBrewer"
+)
+
+for (pkg in required_packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+}
+
+library(DESeq2)
+library(tidyverse)
+library(pheatmap)
+library(RColorBrewer)
+library(ggplot2)
+
+
+# ============================================================
+# LOAD COUNT MATRIX
+# ============================================================
+
+count_data <- read.delim(
+  "count covid.tabular",
+  header = TRUE,
+  row.names = 1,
+  check.names = FALSE,
+  quote = "",
+  fill = TRUE
+)
+
+dim(count_data)
+
+head(
+  count_data[, 1:5]
+)
+
+
+# ============================================================
+# CLEAN SAMPLE NAMES
+# ============================================================
+
+colnames(count_data) <- gsub(
+  "_new_est_reads",
+  "",
+  colnames(count_data)
+)
+
+colnames(count_data)
+
+
+# ============================================================
+# CREATE SAMPLE METADATA
+# ============================================================
+
+metadata <- data.frame(
+
+  sample = c(
+    "SRR12328952",
+    "SRR12328893",
+    "SRR12328938",
+    "SRR12328924",
+    "SRR12328909",
+    "SRR12328939",
+    "SRR12328925",
+    "SRR12328901",
+    "SRR12328908",
+    "SRR12328919",
+    "SRR12328895",
+    "SRR12328904",
+    "SRR12328916",
+    "SRR12328922",
+    "SRR12328897",
+    "SRR12328917",
+    "SRR12328898",
+    "SRR12328903",
+    "SRR12328906",
+    "SRR12328923"
+  ),
+
+  condition = c(
+    "COVID",
+    "Health",
+    "COVID",
+    "COVID",
+    "Health",
+    "COVID",
+    "COVID",
+    "Health",
+    "Health",
+    "COVID",
+    "Health",
+    "Health",
+    "COVID",
+    "COVID",
+    "Health",
+    "COVID",
+    "Health",
+    "Health",
+    "Health",
+    "COVID"
+  )
+
+)
+
+
+# ============================================================
+# PREPARE METADATA
+# ============================================================
+
+rownames(metadata) <- metadata$sample
+
+metadata$sample <- NULL
+
+metadata$condition <- factor(
+  metadata$condition
+)
+
+metadata <- metadata[
+  colnames(count_data),
+  ,
+  drop = FALSE
+]
+
+
+# ============================================================
+# VERIFY SAMPLE MATCHING
+# ============================================================
+
+all(
+  rownames(metadata) ==
+  colnames(count_data)
+)
+
+
+# ============================================================
+# CREATE DESEQ2 DATASET
+# ============================================================
+
+dds <- DESeqDataSetFromMatrix(
+
+  countData = count_data,
+
+  colData = metadata,
+
+  design = ~ condition
+
+)
+
+dds
+
+
+# ============================================================
+# LOW-ABUNDANCE FILTERING
+# ============================================================
+
+keep <- rowSums(
+  counts(dds)
+) >= 10
+
+dds <- dds[
+  keep,
+]
+
+dds
+
+
+# ============================================================
+# RUN DESEQ2 ANALYSIS
+# ============================================================
+
+dds <- DESeq(
+  dds
+)
+
+res <- results(
+  dds
+)
+
+summary(
+  res
+)
+
+
+# ============================================================
+# EXTRACT DESEQ2 RESULTS
+# ============================================================
+
+res_df <- as.data.frame(
+  res
+)
+
+res_df <- res_df[
+  !is.na(res_df$padj),
+]
+
+head(
+  res_df
+)
+
+
+# ============================================================
+# IDENTIFY SIGNIFICANT MICROBES
+# ============================================================
+
+sig_res <- res_df[
+  res_df$padj < 0.05,
+]
+
+nrow(
+  sig_res
+)
+
+
+# ============================================================
+# VOLCANO PLOT
+# ============================================================
+
+volcano_df <- res_df
+
+volcano_df$significance <- "Not Significant"
+
+volcano_df$significance[
+  volcano_df$padj < 0.05 &
+  volcano_df$log2FoldChange > 0
+] <- "Upregulated in COVID-19"
+
+volcano_df$significance[
+  volcano_df$padj < 0.05 &
+  volcano_df$log2FoldChange < 0
+] <- "Upregulated in Healthy"
+
+
+volcano_plot <- ggplot(
+
+  volcano_df,
+
+  aes(
+    x = log2FoldChange,
+    y = -log10(padj)
+  )
+
+) +
+
+  geom_point(
+
+    aes(
+      color = significance
+    ),
+
+    alpha = 0.7,
+
+    size = 2
+
+  ) +
+
+  theme_minimal() +
+
+  labs(
+
+    title = "Volcano Plot: COVID-19 vs Healthy",
+
+    x = "Log2 Fold Change",
+
+    y = "-Log10 Adjusted P-value"
+
+  )
+
+
+volcano_plot
+
+
+ggsave(
+
+  "COVID19_volcano_plot.png",
+
+  plot = volcano_plot,
+
+  width = 8,
+
+  height = 6,
+
+  dpi = 300
+
+)
+
+
+ggsave(
+
+  "COVID19_volcano_plot.pdf",
+
+  plot = volcano_plot,
+
+  width = 8,
+
+  height = 6
+
+)
+
+
+# ============================================================
+# VARIANCE STABILIZING TRANSFORMATION
+# ============================================================
+
+vsd <- varianceStabilizingTransformation(
+
+  dds,
+
+  blind = FALSE
+
+)
+
+
+# ============================================================
+# PCA ANALYSIS
+# ============================================================
+
+pcaData <- plotPCA(
+
+  vsd,
+
+  intgroup = "condition",
+
+  returnData = TRUE
+
+)
+
+
+percentVar <- round(
+
+  100 *
+
+  attr(
+    pcaData,
+    "percentVar"
+  )
+
+)
+
+
+pca_plot <- ggplot(
+
+  pcaData,
+
+  aes(
+    PC1,
+    PC2,
+    color = condition
+  )
+
+) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  theme_minimal() +
+
+  labs(
+
+    title = "PCA Plot: COVID-19 vs Healthy",
+
+    x = paste0(
+      "PC1: ",
+      percentVar[1],
+      "% variance"
+    ),
+
+    y = paste0(
+      "PC2: ",
+      percentVar[2],
+      "% variance"
+    )
+
+  )
+
+
+pca_plot
+
+
+ggsave(
+
+  "COVID19_PCA_plot.png",
+
+  plot = pca_plot,
+
+  width = 7,
+
+  height = 5,
+
+  dpi = 300
+
+)
+
+
+ggsave(
+
+  "COVID19_PCA_plot.pdf",
+
+  plot = pca_plot,
+
+  width = 7,
+
+  height = 5
+
+)
+
+
+# ============================================================
+# MA PLOT
+# ============================================================
+
+ma_df <- as.data.frame(
+  res
+)
+
+ma_df <- ma_df[
+  !is.na(ma_df$log2FoldChange),
+]
+
+
+ma_df$significance <- "Not Significant"
+
+ma_df$significance[
+  ma_df$padj < 0.05
+] <- "Significant"
+
+
+ma_plot <- ggplot(
+
+  ma_df,
+
+  aes(
+
+    x = log10(
+      baseMean + 1
+    ),
+
+    y = log2FoldChange
+
+  )
+
+) +
+
+  geom_point(
+
+    aes(
+      color = significance
+    ),
+
+    alpha = 0.6,
+
+    size = 2
+
+  ) +
+
+  scale_color_manual(
+
+    values = c(
+
+      "Significant" = "red",
+
+      "Not Significant" = "grey"
+
+    )
+
+  ) +
+
+  theme_minimal() +
+
+  labs(
+
+    title = "MA Plot: COVID-19 vs Healthy",
+
+    x = "Log10 Mean Abundance",
+
+    y = "Log2 Fold Change"
+
+  )
+
+
+ma_plot
+
+
+ggsave(
+
+  "COVID19_MA_plot.png",
+
+  plot = ma_plot,
+
+  width = 8,
+
+  height = 6,
+
+  dpi = 300
+
+)
+
+
+ggsave(
+
+  "COVID19_MA_plot.pdf",
+
+  plot = ma_plot,
+
+  width = 8,
+
+  height = 6
+
+)
+
+
+# ============================================================
+# HEATMAP OF SIGNIFICANT MICROBES
+# ============================================================
+
+sig <- res[
+  which(
+    res$padj < 0.05
+  ),
+]
+
+
+sig <- sig[
+  !is.na(sig$padj),
+]
+
+
+if (
+  nrow(sig) < 10
+) {
+
+  sig <- res[
+    order(
+      res$padj
+    ),
+  ][1:50, ]
+
+}
+
+
+vsd_mat <- assay(
+  vsd
+)
+
+
+sig_mat <- vsd_mat[
+  rownames(sig),
+]
+
+
+annotation_col <- data.frame(
+
+  Condition = colData(dds)$condition
+
+)
+
+
+rownames(
+  annotation_col
+) <- colnames(
+  vsd_mat
+)
+
+
+pdf(
+
+  "COVID19_heatmap.pdf",
+
+  width = 8,
+
+  height = 6
+
+)
+
+
+pheatmap(
+
+  sig_mat,
+
+  scale = "row",
+
+  annotation_col = annotation_col,
+
+  show_rownames = FALSE,
+
+  clustering_distance_rows = "euclidean",
+
+  clustering_distance_cols = "euclidean",
+
+  clustering_method = "complete",
+
+  main = "Significant Microbes Heatmap: COVID-19 vs Healthy"
+
+)
+
+
+dev.off()
+
+
+# ============================================================
+# IDENTIFY CASE- AND CONTROL-ASSOCIATED MICROBES
+# ============================================================
+
+res_df <- res_df[
+  !is.na(res_df$padj),
+]
+
+
+covid_enriched <- res_df[
+  res_df$log2FoldChange > 0,
+]
+
+
+covid_enriched <- covid_enriched[
+  order(
+    -covid_enriched$log2FoldChange
+  ),
+]
+
+
+healthy_enriched <- res_df[
+  res_df$log2FoldChange < 0,
+]
+
+
+healthy_enriched <- healthy_enriched[
+  order(
+    healthy_enriched$log2FoldChange
+  ),
+]
+
+
+head(
+  covid_enriched,
+  10
+)
+
+
+head(
+  healthy_enriched,
+  10
+)
+
+
+# ============================================================
+# SAVE RESULT TABLES
+# ============================================================
+
+write.csv(
+
+  covid_enriched,
+
+  "Top_COVID19_enriched_microbes.csv"
+
+)
+
+
+write.csv(
+
+  healthy_enriched,
+
+  "Top_Healthy_enriched_microbes_COVID19.csv"
+
+)
+
+
+write.csv(
+
+  res_df,
+
+  "COVID19_full_DESeq2_results.csv"
+
+)
+
+
+write.csv(
+
+  sig_res,
+
+  "COVID19_significant_DESeq2_results.csv"
+
+)
+
+
+# ============================================================
+# ANALYSIS COMPLETED
+# ============================================================
+
+print(
+  "COVID-19 DESeq2 analysis completed successfully."
+)
