@@ -1,0 +1,505 @@
+# ============================================================
+# FIGURE 3
+# DIFFERENTIAL MICROBIAL OVERLAP BETWEEN DISEASES
+# ============================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# INPUT TOP 100 FILES
+# ============================================================
+
+files = {
+
+    "Fibromyalgia": {
+        "case":
+            "Fibromyalgia_Top100_Case.csv",
+        "control":
+            "Fibromyalgia_Top100_Control.csv"
+    },
+
+    "Fatigue": {
+        "case":
+            "Fatigue_Top100_Case.csv",
+        "control":
+            "Fatigue_Top100_Control.csv"
+    },
+
+    "IBS": {
+        "case":
+            "IBS_Top100_Case.csv",
+        "control":
+            "IBS_Top100_Control.csv"
+    }
+}
+
+
+# ============================================================
+# LOAD FILES
+# ============================================================
+
+case_tables = {}
+control_tables = {}
+
+
+for disease, disease_files in files.items():
+
+    case_tables[disease] = pd.read_csv(
+        disease_files["case"]
+    )
+
+    control_tables[disease] = pd.read_csv(
+        disease_files["control"]
+    )
+
+
+# ============================================================
+# PAIRWISE OVERLAP PLOT FUNCTION
+# ============================================================
+
+def plot_pair_overlap(
+    disease_1,
+    disease_2,
+    panel,
+    output_file
+):
+
+    case_1 = case_tables[
+        disease_1
+    ]
+
+    case_2 = case_tables[
+        disease_2
+    ]
+
+    control_1 = control_tables[
+        disease_1
+    ]
+
+    control_2 = control_tables[
+        disease_2
+    ]
+
+
+    # --------------------------------------------------------
+    # SHARED CASE MICROBES
+    # --------------------------------------------------------
+
+    shared_case = (
+        case_1[
+            [
+                "microbe",
+                "case_rank"
+            ]
+        ]
+        .merge(
+            case_2[
+                [
+                    "microbe",
+                    "case_rank"
+                ]
+            ],
+            on="microbe",
+            suffixes=(
+                f"_{disease_1}",
+                f"_{disease_2}"
+            )
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # SHARED CONTROL MICROBES
+    # --------------------------------------------------------
+
+    shared_control = (
+        control_1[
+            [
+                "microbe",
+                "control_rank"
+            ]
+        ]
+        .merge(
+            control_2[
+                [
+                    "microbe",
+                    "control_rank"
+                ]
+            ],
+            on="microbe",
+            suffixes=(
+                f"_{disease_1}",
+                f"_{disease_2}"
+            )
+        )
+    )
+
+
+    shared_case = shared_case.sort_values(
+        f"case_rank_{disease_1}"
+    )
+
+    shared_control = shared_control.sort_values(
+        f"control_rank_{disease_1}"
+    )
+
+
+    # --------------------------------------------------------
+    # COMBINED X POSITIONS
+    # --------------------------------------------------------
+
+    case_species = shared_case[
+        "microbe"
+    ].tolist()
+
+    control_species = shared_control[
+        "microbe"
+    ].tolist()
+
+    all_species = (
+        case_species
+        + control_species
+    )
+
+    case_x = np.arange(
+        len(case_species)
+    )
+
+    control_x = np.arange(
+        len(control_species)
+    ) + len(case_species) + 1
+
+
+    # --------------------------------------------------------
+    # PLOT
+    # --------------------------------------------------------
+
+    fig, ax = plt.subplots(
+        figsize=(24, 7)
+    )
+
+
+    ax.scatter(
+        case_x,
+        shared_case[
+            f"case_rank_{disease_1}"
+        ],
+        marker="o",
+        label=f"{disease_1} — case-associated"
+    )
+
+    ax.scatter(
+        case_x,
+        shared_case[
+            f"case_rank_{disease_2}"
+        ],
+        marker="s",
+        label=f"{disease_2} — case-associated"
+    )
+
+
+    ax.scatter(
+        control_x,
+        shared_control[
+            f"control_rank_{disease_1}"
+        ],
+        marker="o",
+        label=f"{disease_1} — control-associated"
+    )
+
+    ax.scatter(
+        control_x,
+        shared_control[
+            f"control_rank_{disease_2}"
+        ],
+        marker="s",
+        label=f"{disease_2} — control-associated"
+    )
+
+
+    divider = len(
+        case_species
+    ) + 0.5
+
+    ax.axvline(
+        divider,
+        linestyle="--",
+        linewidth=1
+    )
+
+
+    ax.invert_yaxis()
+
+    ax.set_ylabel(
+        "Microbial rank"
+    )
+
+    ax.set_xlabel(
+        "Shared microbial species"
+    )
+
+    ax.set_title(
+        f"Overlap of differentially abundant microbes between "
+        f"{disease_1} and {disease_2}"
+    )
+
+
+    tick_positions = np.concatenate(
+        [
+            case_x,
+            control_x
+        ]
+    )
+
+    ax.set_xticks(
+        tick_positions
+    )
+
+    ax.set_xticklabels(
+        all_species,
+        rotation=90,
+        fontsize=7
+    )
+
+
+    ax.text(
+        len(case_species) / 2,
+        102,
+        "Case-associated shared microbes",
+        ha="center",
+        fontsize=14
+    )
+
+
+    ax.text(
+        len(case_species)
+        + 1
+        + len(control_species) / 2,
+        102,
+        "Control-associated shared microbes",
+        ha="center",
+        fontsize=14
+    )
+
+
+    ax.legend(
+        loc="upper right"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        output_file,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+
+    return {
+        "Panel": panel,
+        "Disease_1": disease_1,
+        "Disease_2": disease_2,
+        "Shared_case_species":
+            len(shared_case),
+        "Shared_control_species":
+            len(shared_control),
+        "Total_plotted_species":
+            len(shared_case)
+            + len(shared_control)
+    }
+
+
+# ============================================================
+# FIGURE 3B
+# ============================================================
+
+validation_rows = []
+
+
+validation_rows.append(
+
+    plot_pair_overlap(
+        "Fibromyalgia",
+        "Fatigue",
+        "3b",
+        "Figure_3b_Fibromyalgia_Fatigue_REFERENCE_STYLE.png"
+    )
+
+)
+
+
+# ============================================================
+# FIGURE 3C
+# ============================================================
+
+validation_rows.append(
+
+    plot_pair_overlap(
+        "Fibromyalgia",
+        "IBS",
+        "3c",
+        "Figure_3c_Fibromyalgia_IBS_REFERENCE_STYLE.png"
+    )
+
+)
+
+
+# ============================================================
+# FIGURE 3D
+# ============================================================
+
+validation_rows.append(
+
+    plot_pair_overlap(
+        "IBS",
+        "Fatigue",
+        "3d",
+        "Figure_3d_IBS_Fatigue_REFERENCE_STYLE.png"
+    )
+
+)
+
+
+# ============================================================
+# SAVE VALIDATION
+# ============================================================
+
+validation_df = pd.DataFrame(
+    validation_rows
+)
+
+validation_df.to_csv(
+    "Figure_3b_to_3d_REFERENCE_STYLE_VALIDATION.csv",
+    index=False
+)
+
+
+# ============================================================
+# FIGURE 3E AND 3F LFC MATRICES
+# ============================================================
+
+case_lfc = pd.read_csv(
+    "Figure3e_Case_Shared_Microbes_LFC_Matrix.csv",
+    index_col=0
+)
+
+control_lfc = pd.read_csv(
+    "Figure3f_Control_Shared_Microbes_LFC_Matrix.csv",
+    index_col=0
+)
+
+
+def plot_lfc_matrix(
+    matrix,
+    title,
+    xlabel,
+    output_file
+):
+
+    masked_matrix = np.ma.masked_invalid(
+        matrix.values
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(26, 5)
+    )
+
+    image = ax.imshow(
+        masked_matrix,
+        aspect="auto"
+    )
+
+    ax.set_yticks(
+        np.arange(
+            len(matrix.index)
+        )
+    )
+
+    ax.set_yticklabels(
+        matrix.index
+    )
+
+    ax.set_xticks(
+        np.arange(
+            len(matrix.columns)
+        )
+    )
+
+    ax.set_xticklabels(
+        matrix.columns,
+        rotation=90,
+        fontsize=6
+    )
+
+    ax.set_ylabel(
+        "Disease"
+    )
+
+    ax.set_xlabel(
+        xlabel
+    )
+
+    ax.set_title(
+        title
+    )
+
+    colorbar = fig.colorbar(
+        image,
+        ax=ax
+    )
+
+    colorbar.set_label(
+        r"$\log_2$ fold change"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        output_file,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+
+plot_lfc_matrix(
+    case_lfc,
+    "Case-associated microbes shared by more than two diseases",
+    "Case-associated microbial species",
+    "Figure_3e_Case_Shared_Microbes_LFC.png"
+)
+
+
+plot_lfc_matrix(
+    control_lfc,
+    "Control-associated microbes shared by more than two diseases",
+    "Control-associated microbial species",
+    "Figure_3f_Control_Shared_Microbes_LFC.png"
+)
+
+
+print(
+    "Figure 3b generated."
+)
+
+print(
+    "Figure 3c generated."
+)
+
+print(
+    "Figure 3d generated."
+)
+
+print(
+    "Figure 3e generated."
+)
+
+print(
+    "Figure 3f generated."
+)
