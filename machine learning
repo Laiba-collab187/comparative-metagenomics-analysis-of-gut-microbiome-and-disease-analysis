@@ -1,0 +1,396 @@
+#load files
+import pandas as pd
+import numpy as np
+
+abundance = pd.read_csv(
+    "Colorectal_Neoplasm_transpose.tabular",
+    sep="\t"
+)
+
+labels = pd.read_excel(
+    "Colorectal_Neoplasm_metadata.xlsx"
+)
+#verify the files
+print("Abundance shape:", abundance.shape)
+print("Labels shape:", labels.shape)
+
+print("\nAbundance columns:")
+print(abundance.columns[:5])
+
+print("\nLabels columns:")
+print(labels.columns)
+#clean run ids
+abundance["name"] = (
+    abundance["name"]
+    .astype(str)
+    .str.replace(r"\s+", "", regex=True)
+)
+
+labels["run id"] = (
+    labels["run id"]
+    .astype(str)
+    .str.replace(r"\s+", "", regex=True)
+)
+
+#merge
+merged = abundance.merge(
+    labels,
+    left_on="name",
+    right_on="run id",
+    how="inner"
+)
+
+print("Merged shape:", merged.shape)
+#create x and y
+# Feature matrix
+X = merged.drop(columns=["name", "run id", "label"])
+
+# Labels
+y = merged["label"]
+
+# Clean labels (prevents hidden-space issue)
+y = y.astype(str).str.strip().astype(int)
+
+print("X shape:", X.shape)
+print("y shape:", y.shape)
+
+print("\nClass counts:")
+print(y.value_counts())
+
+#train/test split
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+print("Training:", X_train.shape)
+print("Testing :", X_test.shape)
+
+#feature selection
+from sklearn.feature_selection import SelectKBest, f_classif
+ra
+selector = SelectKBest(
+    score_func=f_classif,
+    k=30
+)
+
+X_train_selected = selector.fit_transform(
+    X_train,
+    y_train
+)
+
+X_test_selected = selector.transform(
+    X_test
+)
+
+selected_features = X.columns[
+    selector.get_support()
+]
+
+print("Selected Features Shape:")
+print(X_train_selected.shape)
+
+print("\nSelected Features:")
+print(selected_features.tolist())
+
+#Save Selected Features (Output 1)
+selected_df = pd.DataFrame({
+    "Selected_Microbe": selected_features
+})
+
+selected_df.to_excel(
+    "Colorectal_Neoplasm_Selected_Features.xlsx",
+    index=False
+)
+Download
+from google.colab import files
+
+files.download(
+    "Colorectal_Neoplasm_Selected_Features.xlsx"
+)
+#Train Both Models
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+
+rf = RandomForestClassifier(
+    random_state=42
+)
+
+gb = GradientBoostingClassifier(
+    random_state=42
+)
+
+rf.fit(
+    X_train_selected,
+    y_train
+)
+
+gb.fit(
+    X_train_selected,
+    y_train
+)
+
+#Test Set Prediction
+rf_probs = rf.predict_proba(
+    X_test_selected
+)[:,1]
+
+gb_probs = gb.predict_proba(
+    X_test_selected
+)[:,1]
+
+#Test AUC
+from sklearn.metrics import roc_auc_score
+
+rf_auc = roc_auc_score(
+    y_test,
+    rf_probs
+)
+
+gb_auc = roc_auc_score(
+    y_test,
+    gb_probs
+)
+
+print("Random Forest Test AUC :", rf_auc)
+print("Gradient Boosting Test AUC :", gb_auc)
+
+#5-fold Cross Validation
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score
+from sklearn.pipeline import Pipeline
+
+cv = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=42
+)
+
+rf_pipeline = Pipeline([
+    ("selector", SelectKBest(f_classif, k=30)),
+    ("rf", RandomForestClassifier(random_state=42))
+    ])
+
+gb_pipeline = Pipeline([
+    ("selector", SelectKBest(f_classif, k=30)),
+    ("gb", GradientBoostingClassifier(random_state=42))
+])
+
+rf_scores = cross_val_score(
+    rf_pipeline,
+    X,
+    y,
+    cv=cv,
+    scoring="roc_auc"
+)
+
+gb_scores = cross_val_score(
+    gb_pipeline,
+    X,
+    y,
+    cv=cv,
+    scoring="roc_auc"
+)
+
+print("RF CV AUC :", rf_scores.mean())
+print("GB CV AUC :", gb_scores.mean())
+
+#ROC Comparison Figure
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+
+rf_fpr, rf_tpr, _ = roc_curve(y_test, rf_probs)
+gb_fpr, gb_tpr, _ = roc_curve(y_test, gb_probs)
+
+rf_auc_plot = auc(rf_fpr, rf_tpr)
+gb_auc_plot = auc(gb_fpr, gb_tpr)
+
+plt.figure(figsize=(7,6))
+
+plt.plot(rf_fpr, rf_tpr,
+         linewidth=2,
+         label=f"Random Forest (AUC = {rf_auc_plot:.2f})")
+
+plt.plot(gb_fpr, gb_tpr,
+         linewidth=2,
+         label=f"Gradient Boosting (AUC = {gb_auc_plot:.2f})")
+
+plt.plot([0,1],[0,1],'k--')
+
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Colorectal Neoplasm ROC Curve")
+plt.legend(loc="lower right")
+
+plt.savefig(
+    "Colorectal_Neoplasm_ROC_Comparison.png",
+    dpi=600,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+#Model Performance Table
+performance = pd.DataFrame({
+    "Model":[
+        "Random Forest",
+        "Gradient Boosting"
+    ],
+    "Test_AUC":[
+        rf_auc,
+        gb_auc
+    ],
+    "CV_AUC":[
+        rf_scores.mean(),
+        gb_scores.mean()
+    ]
+})
+
+performance.to_excel(
+    "Colorectal_Neoplasm_Model_Performance.xlsx",
+    index=False
+)
+
+#Confusion Matrix
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+rf_pred = rf.predict(X_test_selected)
+
+cm = confusion_matrix(y_test, rf_pred)
+
+disp = ConfusionMatrixDisplay(
+    confusion_matrix=cm,
+    display_labels=["Healthy","Colorectal Neoplasm"]
+)
+
+disp.plot(cmap="Blues", values_format="d")
+
+plt.title("Colorectal Neoplasm RF Confusion Matrix")
+
+plt.savefig(
+    "Colorectal_Neoplasm_RF_Confusion_Matrix.png",
+    dpi=600,
+    bbox_inches="tight"
+)
+
+plt.show()
+
+#classification report
+from sklearn.metrics import classification_report
+
+report = classification_report(
+    y_test,
+    rf_pred,
+    output_dict=True
+)
+
+report_df = pd.DataFrame(report).transpose()
+
+report_df.to_excel(
+    "Colorectal_Neoplasm_RF_Classification_Report.xlsx"
+)
+
+#SHAP
+import shap
+
+explainer = shap.TreeExplainer(rf)
+
+shap_values = explainer(X_test_selected)
+
+shap_values_crc = shap.Explanation(
+    values=shap_values.values[:, :, 1],
+    base_values=shap_values.base_values[:, 1],
+    data=shap_values.data,
+    feature_names=selected_features
+)
+
+
+#SHAP summary plot
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10,8))
+
+shap.plots.beeswarm(
+    shap_values_crc,
+    max_display=20,
+    show=False
+)
+
+plt.savefig(
+    "Colorectal_Neoplasm_SHAP_Summary.png",
+    dpi=600,
+    bbox_inches="tight"
+)
+
+plt.show()
+#Download:
+from google.colab import files
+
+files.download("Colorectal_Neoplasm_SHAP_Summary.png")
+
+#SHAP bar plot
+plt.figure(figsize=(10,8))
+
+shap.plots.bar(
+    shap_values_crc,
+    max_display=20,
+    show=False
+)
+
+plt.savefig(
+    "Colorectal_Neoplasm_SHAP_Bar.png",
+    dpi=600,
+    bbox_inches="tight"
+)
+
+plt.show()
+#Download:
+files.download("Colorectal_Neoplasm_SHAP_Bar.png")
+
+#SHAP Values Table
+import numpy as np
+
+mean_shap = np.abs(shap_values_crc.values).mean(axis=0)
+
+shap_table = pd.DataFrame({
+    "Microbe": selected_features,
+    "Mean_SHAP": mean_shap
+})
+
+shap_table = shap_table.sort_values(
+    by="Mean_SHAP",
+    ascending=False
+).reset_index(drop=True)
+
+shap_table.head(20)
+Save:
+shap_table.to_excel(
+    "Colorectal_Neoplasm_SHAP_Values.xlsx",
+    index=False
+)
+
+files.download(
+    "Colorectal_Neoplasm_SHAP_Values.xlsx"
+
+#Top 20 Biomarkers
+top20 = shap_table.head(20)
+
+top20.to_excel(
+    "Colorectal_Neoplasm_Top20_Biomarkers.xlsx",
+    index=False
+)
+
+files.download(
+    "Colorectal_Neoplasm_Top20_Biomarkers.xlsx"
+)
+
+
+
+
+
+
