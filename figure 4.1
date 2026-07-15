@@ -1,0 +1,480 @@
+# ============================================================
+# FIGURE 2
+# SHAP-LFC RELATIONSHIP AND SHARED MICROBIAL SPECIES
+# ============================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+# ============================================================
+# INPUT FILES
+# ============================================================
+
+FIB_SOURCE = (
+    "CORRECTED_Fibromyalgia_Figure2_SHAP_LFC_SOURCE.csv"
+)
+
+FATIGUE_SOURCE = (
+    "CORRECTED_Fatigue_Figure2_SHAP_LFC_SOURCE.csv"
+)
+
+SHARED_CASE_SOURCE = (
+    "CORRECTED_Figure_2C_Shared_Case_41_SOURCE.csv"
+)
+
+SHARED_CONTROL_SOURCE = (
+    "CORRECTED_Figure_2C_Shared_Control_39_SOURCE.csv"
+)
+
+
+# ============================================================
+# LOAD DATA
+# ============================================================
+
+fib = pd.read_csv(
+    FIB_SOURCE
+)
+
+fatigue = pd.read_csv(
+    FATIGUE_SOURCE
+)
+
+shared_case = pd.read_csv(
+    SHARED_CASE_SOURCE
+)
+
+shared_control = pd.read_csv(
+    SHARED_CONTROL_SOURCE
+)
+
+
+# ============================================================
+# VALIDATE SOURCE FILES
+# ============================================================
+
+required_columns = [
+    "microbe",
+    "Case_SHAP_Sum",
+    "Control_SHAP_Sum",
+    "log2FoldChange",
+    "case_rank",
+    "control_rank"
+]
+
+
+for disease, df in [
+    ("Fibromyalgia", fib),
+    ("Fatigue", fatigue)
+]:
+
+    missing = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing:
+
+        raise ValueError(
+            f"{disease}: missing columns {missing}"
+        )
+
+
+print(
+    "Fibromyalgia:",
+    fib.shape
+)
+
+print(
+    "Fatigue:",
+    fatigue.shape
+)
+
+print(
+    "Shared case microbes:",
+    len(shared_case)
+)
+
+print(
+    "Shared control microbes:",
+    len(shared_control)
+)
+
+
+# ============================================================
+# FIGURE 2A AND 2B FUNCTION
+# ============================================================
+
+def plot_shap_lfc(
+    df,
+    disease,
+    panel_letter,
+    output_file
+):
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(20, 8),
+        sharey=True
+    )
+
+
+    # --------------------------------------------------------
+    # CASE PANEL
+    # --------------------------------------------------------
+
+    case_data = df[
+        df["case_rank"].notna()
+    ].copy()
+
+    scatter_case = axes[0].scatter(
+        case_data["Case_SHAP_Sum"],
+        case_data["log2FoldChange"],
+        c=case_data["case_rank"],
+        cmap="Blues_r",
+        s=55
+    )
+
+    axes[0].axhline(
+        0,
+        linestyle="--",
+        linewidth=1
+    )
+
+    axes[0].axvline(
+        0,
+        linestyle="--",
+        linewidth=1
+    )
+
+    axes[0].set_title(
+        "Cases",
+        fontsize=20
+    )
+
+    axes[0].set_xlabel(
+        "Summed Shapley value",
+        fontsize=16
+    )
+
+    axes[0].set_ylabel(
+        r"$\log_2$ fold change",
+        fontsize=16
+    )
+
+
+    # Label top-ranked case microbes
+
+    case_labels = (
+        case_data
+        .sort_values(
+            "case_rank"
+        )
+        .head(10)
+    )
+
+    for _, row in case_labels.iterrows():
+
+        axes[0].annotate(
+            row["microbe"],
+            (
+                row["Case_SHAP_Sum"],
+                row["log2FoldChange"]
+            ),
+            xytext=(5, 3),
+            textcoords="offset points",
+            fontsize=9
+        )
+
+
+    case_colorbar = fig.colorbar(
+        scatter_case,
+        ax=axes[0]
+    )
+
+    case_colorbar.set_label(
+        "Case-associated rank",
+        fontsize=14
+    )
+
+
+    # --------------------------------------------------------
+    # CONTROL PANEL
+    # --------------------------------------------------------
+
+    control_data = df[
+        df["control_rank"].notna()
+    ].copy()
+
+    scatter_control = axes[1].scatter(
+        control_data["Control_SHAP_Sum"],
+        control_data["log2FoldChange"],
+        c=control_data["control_rank"],
+        cmap="Reds_r",
+        s=55
+    )
+
+    axes[1].axhline(
+        0,
+        linestyle="--",
+        linewidth=1
+    )
+
+    axes[1].axvline(
+        0,
+        linestyle="--",
+        linewidth=1
+    )
+
+    axes[1].set_title(
+        "Controls",
+        fontsize=20
+    )
+
+    axes[1].set_xlabel(
+        "Summed Shapley value",
+        fontsize=16
+    )
+
+
+    # Label top-ranked control microbes
+
+    control_labels = (
+        control_data
+        .sort_values(
+            "control_rank"
+        )
+        .head(10)
+    )
+
+    for _, row in control_labels.iterrows():
+
+        axes[1].annotate(
+            row["microbe"],
+            (
+                row["Control_SHAP_Sum"],
+                row["log2FoldChange"]
+            ),
+            xytext=(5, 3),
+            textcoords="offset points",
+            fontsize=9
+        )
+
+
+    control_colorbar = fig.colorbar(
+        scatter_control,
+        ax=axes[1]
+    )
+
+    control_colorbar.set_label(
+        "Control-associated rank",
+        fontsize=14
+    )
+
+
+    # --------------------------------------------------------
+    # PANEL TITLE
+    # --------------------------------------------------------
+
+    fig.text(
+        0.01,
+        0.98,
+        f"{panel_letter}  {disease}",
+        fontsize=24,
+        fontweight="bold",
+        va="top"
+    )
+
+    plt.tight_layout(
+        rect=[
+            0,
+            0,
+            1,
+            0.95
+        ]
+    )
+
+    plt.savefig(
+        output_file,
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+
+# ============================================================
+# GENERATE FIGURE 2A
+# ============================================================
+
+plot_shap_lfc(
+    fib,
+    "Fibromyalgia",
+    "a",
+    "Figure_2a_Fibromyalgia_LABELLED.png"
+)
+
+
+# ============================================================
+# GENERATE FIGURE 2B
+# ============================================================
+
+plot_shap_lfc(
+    fatigue,
+    "Fatigue",
+    "b",
+    "Figure_2b_Fatigue_LABELLED.png"
+)
+
+
+# ============================================================
+# FIGURE 2C
+# ============================================================
+
+case_species = shared_case[
+    "microbe"
+].tolist()
+
+control_species = shared_control[
+    "microbe"
+].tolist()
+
+
+fig, axes = plt.subplots(
+    1,
+    2,
+    figsize=(24, 7)
+)
+
+
+# ------------------------------------------------------------
+# SHARED CASE-ASSOCIATED MICROBES
+# ------------------------------------------------------------
+
+x_case = np.arange(
+    len(shared_case)
+)
+
+axes[0].scatter(
+    x_case,
+    shared_case[
+        "case_rank_Fibromyalgia"
+    ],
+    marker="o",
+    label="Fibromyalgia"
+)
+
+axes[0].scatter(
+    x_case,
+    shared_case[
+        "case_rank_Fatigue"
+    ],
+    marker="^",
+    label="Fatigue"
+)
+
+axes[0].invert_yaxis()
+
+axes[0].set_title(
+    f"Case-associated shared microbes (n = {len(shared_case)})"
+)
+
+axes[0].set_ylabel(
+    "Microbial rank"
+)
+
+axes[0].set_xlabel(
+    "Shared microbial species"
+)
+
+axes[0].set_xticks(
+    x_case
+)
+
+axes[0].set_xticklabels(
+    case_species,
+    rotation=90,
+    fontsize=7
+)
+
+axes[0].legend()
+
+
+# ------------------------------------------------------------
+# SHARED CONTROL-ASSOCIATED MICROBES
+# ------------------------------------------------------------
+
+x_control = np.arange(
+    len(shared_control)
+)
+
+axes[1].scatter(
+    x_control,
+    shared_control[
+        "control_rank_Fibromyalgia"
+    ],
+    marker="o",
+    label="Fibromyalgia"
+)
+
+axes[1].scatter(
+    x_control,
+    shared_control[
+        "control_rank_Fatigue"
+    ],
+    marker="^",
+    label="Fatigue"
+)
+
+axes[1].invert_yaxis()
+
+axes[1].set_title(
+    f"Control-associated shared microbes (n = {len(shared_control)})"
+)
+
+axes[1].set_ylabel(
+    "Microbial rank"
+)
+
+axes[1].set_xlabel(
+    "Shared microbial species"
+)
+
+axes[1].set_xticks(
+    x_control
+)
+
+axes[1].set_xticklabels(
+    control_species,
+    rotation=90,
+    fontsize=7
+)
+
+axes[1].legend()
+
+
+plt.tight_layout()
+
+plt.savefig(
+    "Figure_2c_Fibromyalgia_Fatigue.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+
+plt.close()
+
+
+print(
+    "Figure 2a generated."
+)
+
+print(
+    "Figure 2b generated."
+)
+
+print(
+    "Figure 2c generated."
+)
