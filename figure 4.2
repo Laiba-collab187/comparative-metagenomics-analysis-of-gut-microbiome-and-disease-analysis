@@ -1,4 +1,168 @@
 # ============================================================
+# FIGURE 3A
+# OVERLAP OF TOP 100 MICROBIAL SPECIES
+# ============================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Keep text as vector in SVG
+plt.rcParams["svg.fonttype"] = "none"
+
+# ============================================================
+# LOAD MATRICES
+# ============================================================
+
+case_matrix = pd.read_csv(
+    "Top100_Case_Overlap_Matrix.csv",
+    index_col=0
+)
+
+control_matrix = pd.read_csv(
+    "Top100_Control_Overlap_Matrix.csv",
+    index_col=0
+)
+
+print("Matrices loaded successfully.")
+# # ============================================================
+# FIGURE 3A
+# OVERLAP OF TOP 100 MICROBIAL SPECIES
+# ============================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Keep text as vector in SVG
+plt.rcParams["svg.fonttype"] = "none"
+
+# ============================================================
+# LOAD MATRICES
+# ============================================================
+
+case_matrix = pd.read_csv(
+    "CORRECTED_Top100_Case_Overlap_Matrix.csv",
+    index_col=0
+)
+
+control_matrix = pd.read_csv(
+    "CORRECTED_Top100_Control_Overlap_Matrix.csv",
+    index_col=0
+)
+
+print("Case matrix shape:", case_matrix.shape)
+print("Control matrix shape:", control_matrix.shape)
+print("Matrices loaded successfully.")
+
+# ============================================================
+# FUNCTION TO PLOT OVERLAP HEATMAP (SVG)
+# ============================================================
+
+def plot_overlap_matrix(
+    matrix,
+    title,
+    output_file
+):
+
+    fig, ax = plt.subplots(
+        figsize=(10,10)
+    )
+
+    image = ax.imshow(
+        matrix.values,
+        cmap="viridis",
+        aspect="equal"
+    )
+
+    # --------------------------
+    # Axis labels
+    # --------------------------
+
+    ax.set_xticks(
+        np.arange(len(matrix.columns))
+    )
+
+    ax.set_xticklabels(
+        matrix.columns,
+        rotation=60,
+        ha="right",
+        fontsize=12
+    )
+
+    ax.set_yticks(
+        np.arange(len(matrix.index))
+    )
+
+    ax.set_yticklabels(
+        matrix.index,
+        fontsize=12
+    )
+
+    ax.set_title(
+        title,
+        fontsize=16
+    )
+
+    # --------------------------
+    # Numbers inside cells
+    # --------------------------
+
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+
+            ax.text(
+                j,
+                i,
+                str(int(matrix.iloc[i,j])),
+                ha="center",
+                va="center",
+                color="black",
+                fontsize=10
+            )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        output_file,
+        format="svg",
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+
+# ============================================================
+# GENERATE FIGURE 3A (CASE)
+# ============================================================
+
+plot_overlap_matrix(
+
+    case_matrix,
+
+    "Overlap of top 100 case-associated microbial species",
+
+    "Figure_3a_Case_Associated_Overlap.svg"
+
+)
+
+
+# ============================================================
+# GENERATE FIGURE 3A (CONTROL)
+# ============================================================
+
+plot_overlap_matrix(
+
+    control_matrix,
+
+    "Overlap of top 100 control-associated microbial species",
+
+    "Figure_3a_Control_Associated_Overlap.svg"
+
+)
+
+print("Figure 3a (Case) generated.")
+print("Figure 3a (Control) generated.")============================================================
 # FIGURE 3
 # DIFFERENTIAL MICROBIAL OVERLAP BETWEEN DISEASES
 # ============================================================
