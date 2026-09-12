@@ -1,710 +1,2254 @@
-# ============================================================
-# COVID-19 DIFFERENTIAL ABUNDANCE ANALYSIS USING DESeq2
-# ============================================================
+# ================================================================
+# STEP 1 — FINAL INPUT VALIDATION FOR CORRECTED DESeq2
+# ================================================================
+#
+# Uses ONLY the corrected microbial abundance matrices:
+#   /content/CORRECTED_MICROBIAL_ABUNDANCE/
+#
+# No DESeq2
+# No ML
+# No SHAP
+#
+# This step locks the exact inputs before DESeq2.
+# ================================================================
 
+import os
+import re
+import pandas as pd
+import numpy as np
 
-# ============================================================
-# INSTALL AND LOAD REQUIRED PACKAGES
-# ============================================================
+CORRECTED_DIR = "/content/CORRECTED_MICROBIAL_ABUNDANCE"
 
-if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  install.packages("BiocManager")
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "COVID19",
+    "Dwarfism",
+    "Fatigue",
+    "Fibromyalgia",
+    "IBS",
+    "Neuroblastoma",
+    "Obesity",
+    "Ulcerative_Colitis"
+]
+
+METADATA_FILES = {
+    "Autism":
+        "/content/autism spectrum phenotype.xlsx",
+
+    "Colorectal_Neoplasm":
+        "/content/colorectal neoplasm phenotype.xlsx",
+
+    "COVID19":
+        "/content/covid phenotype.xlsx",
+
+    "Dwarfism":
+        "/content/dwarfism phenotype.xlsx",
+
+    "Fatigue":
+        "/content/fatigue syndrome phenotype.xlsx",
+
+    "Fibromyalgia":
+        "/content/fibromyalgia phenotype.xlsx",
+
+    "IBS":
+        "/content/ibs phenotype.txt.xlsx",
+
+    "Neuroblastoma":
+        "/content/neuroblastoma phenotype.xlsx",
+
+    "Obesity":
+        "/content/obesity phenotype.xlsx",
+
+    "Ulcerative_Colitis":
+        "/content/ulcerative colitis phenotype.xlsx"
 }
 
-if (!requireNamespace("DESeq2", quietly = TRUE)) {
-  BiocManager::install("DESeq2", ask = FALSE)
-}
-
-required_packages <- c(
-  "tidyverse",
-  "pheatmap",
-  "RColorBrewer"
-)
-
-for (pkg in required_packages) {
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg)
-  }
-}
-
-library(DESeq2)
-library(tidyverse)
-library(pheatmap)
-library(RColorBrewer)
-library(ggplot2)
-
-
-# ============================================================
-# LOAD COUNT MATRIX
-# ============================================================
-
-count_data <- read.delim(
-  "count covid.tabular",
-  header = TRUE,
-  row.names = 1,
-  check.names = FALSE,
-  quote = "",
-  fill = TRUE
-)
-
-dim(count_data)
-
-head(
-  count_data[, 1:5]
-)
-
-
-# ============================================================
-# CLEAN SAMPLE NAMES
-# ============================================================
-
-colnames(count_data) <- gsub(
-  "_new_est_reads",
-  "",
-  colnames(count_data)
-)
-
-colnames(count_data)
-
-
-# ============================================================
-# CREATE SAMPLE METADATA
-# ============================================================
-
-metadata <- data.frame(
-
-  sample = c(
-    "SRR12328952",
-    "SRR12328893",
-    "SRR12328938",
-    "SRR12328924",
-    "SRR12328909",
-    "SRR12328939",
-    "SRR12328925",
-    "SRR12328901",
-    "SRR12328908",
-    "SRR12328919",
-    "SRR12328895",
-    "SRR12328904",
-    "SRR12328916",
-    "SRR12328922",
-    "SRR12328897",
-    "SRR12328917",
-    "SRR12328898",
-    "SRR12328903",
-    "SRR12328906",
-    "SRR12328923"
-  ),
-
-  condition = c(
-    "COVID",
-    "Health",
-    "COVID",
-    "COVID",
-    "Health",
-    "COVID",
-    "COVID",
-    "Health",
-    "Health",
-    "COVID",
-    "Health",
-    "Health",
-    "COVID",
-    "COVID",
-    "Health",
-    "COVID",
-    "Health",
-    "Health",
-    "Health",
-    "COVID"
-  )
 
-)
+def clean_label(x):
 
+    if pd.isna(x):
+        return np.nan
 
-# ============================================================
-# PREPARE METADATA
-# ============================================================
+    s = str(x)
 
-rownames(metadata) <- metadata$sample
+    # Remove all whitespace, including unusual Unicode spaces
+    s = re.sub(r"\s+", "", s)
 
-metadata$sample <- NULL
+    # Remove zero-width characters
+    for c in [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060"
+    ]:
+        s = s.replace(c, "")
 
-metadata$condition <- factor(
-  metadata$condition
-)
+    if s in ["0", "0.0"]:
+        return 0
 
-metadata <- metadata[
-  colnames(count_data),
-  ,
-  drop = FALSE
-]
+    if s in ["1", "1.0"]:
+        return 1
 
+    try:
+        v = float(s)
 
-# ============================================================
-# VERIFY SAMPLE MATCHING
-# ============================================================
+        if v == 0:
+            return 0
 
-all(
-  rownames(metadata) ==
-  colnames(count_data)
-)
+        if v == 1:
+            return 1
 
+    except:
+        pass
 
-# ============================================================
-# CREATE DESEQ2 DATASET
-# ============================================================
+    return np.nan
 
-dds <- DESeqDataSetFromMatrix(
 
-  countData = count_data,
+print("=" * 100)
+print("FINAL CORRECTED INPUT VALIDATION")
+print("=" * 100)
 
-  colData = metadata,
+validated = {}
 
-  design = ~ condition
+for disease in DISEASES:
 
-)
-
-dds
-
-
-# ============================================================
-# LOW-ABUNDANCE FILTERING
-# ============================================================
-
-keep <- rowSums(
-  counts(dds)
-) >= 10
-
-dds <- dds[
-  keep,
-]
-
-dds
-
-
-# ============================================================
-# RUN DESEQ2 ANALYSIS
-# ============================================================
-
-dds <- DESeq(
-  dds
-)
-
-res <- results(
-  dds
-)
-
-summary(
-  res
-)
-
-
-# ============================================================
-# EXTRACT DESEQ2 RESULTS
-# ============================================================
-
-res_df <- as.data.frame(
-  res
-)
-
-res_df <- res_df[
-  !is.na(res_df$padj),
-]
-
-head(
-  res_df
-)
-
-
-# ============================================================
-# IDENTIFY SIGNIFICANT MICROBES
-# ============================================================
-
-sig_res <- res_df[
-  res_df$padj < 0.05,
-]
-
-nrow(
-  sig_res
-)
-
-
-# ============================================================
-# VOLCANO PLOT
-# ============================================================
-
-volcano_df <- res_df
-
-volcano_df$significance <- "Not Significant"
-
-volcano_df$significance[
-  volcano_df$padj < 0.05 &
-  volcano_df$log2FoldChange > 0
-] <- "Upregulated in COVID-19"
-
-volcano_df$significance[
-  volcano_df$padj < 0.05 &
-  volcano_df$log2FoldChange < 0
-] <- "Upregulated in Healthy"
-
-
-volcano_plot <- ggplot(
-
-  volcano_df,
-
-  aes(
-    x = log2FoldChange,
-    y = -log10(padj)
-  )
-
-) +
-
-  geom_point(
-
-    aes(
-      color = significance
-    ),
-
-    alpha = 0.7,
-
-    size = 2
-
-  ) +
-
-  theme_minimal() +
-
-  labs(
-
-    title = "Volcano Plot: COVID-19 vs Healthy",
-
-    x = "Log2 Fold Change",
-
-    y = "-Log10 Adjusted P-value"
-
-  )
-
-
-volcano_plot
-
-
-ggsave(
-
-  "COVID19_volcano_plot.png",
-
-  plot = volcano_plot,
-
-  width = 8,
-
-  height = 6,
-
-  dpi = 300
-
-)
-
-
-ggsave(
-
-  "COVID19_volcano_plot.pdf",
-
-  plot = volcano_plot,
-
-  width = 8,
-
-  height = 6
-
-)
-
-
-# ============================================================
-# VARIANCE STABILIZING TRANSFORMATION
-# ============================================================
-
-vsd <- varianceStabilizingTransformation(
-
-  dds,
-
-  blind = FALSE
-
-)
-
-
-# ============================================================
-# PCA ANALYSIS
-# ============================================================
-
-pcaData <- plotPCA(
-
-  vsd,
-
-  intgroup = "condition",
-
-  returnData = TRUE
-
-)
-
-
-percentVar <- round(
-
-  100 *
-
-  attr(
-    pcaData,
-    "percentVar"
-  )
-
-)
-
-
-pca_plot <- ggplot(
-
-  pcaData,
-
-  aes(
-    PC1,
-    PC2,
-    color = condition
-  )
-
-) +
-
-  geom_point(
-    size = 3
-  ) +
-
-  theme_minimal() +
-
-  labs(
-
-    title = "PCA Plot: COVID-19 vs Healthy",
-
-    x = paste0(
-      "PC1: ",
-      percentVar[1],
-      "% variance"
-    ),
-
-    y = paste0(
-      "PC2: ",
-      percentVar[2],
-      "% variance"
+    abundance_file = os.path.join(
+        CORRECTED_DIR,
+        f"{disease}_CORRECTED_MICROBIAL_ABUNDANCE.tabular"
     )
 
-  )
+    metadata_file = METADATA_FILES[disease]
 
+    # ------------------------------------------------------------
+    # FILE CHECK
+    # ------------------------------------------------------------
 
-pca_plot
+    if not os.path.exists(abundance_file):
+        raise FileNotFoundError(
+            f"{disease}: corrected abundance file missing:\n"
+            f"{abundance_file}"
+        )
 
+    if not os.path.exists(metadata_file):
+        raise FileNotFoundError(
+            f"{disease}: metadata file missing:\n"
+            f"{metadata_file}"
+        )
 
-ggsave(
+    # ------------------------------------------------------------
+    # READ
+    # ------------------------------------------------------------
 
-  "COVID19_PCA_plot.png",
-
-  plot = pca_plot,
-
-  width = 7,
-
-  height = 5,
-
-  dpi = 300
-
-)
-
-
-ggsave(
-
-  "COVID19_PCA_plot.pdf",
-
-  plot = pca_plot,
-
-  width = 7,
-
-  height = 5
-
-)
-
-
-# ============================================================
-# MA PLOT
-# ============================================================
-
-ma_df <- as.data.frame(
-  res
-)
-
-ma_df <- ma_df[
-  !is.na(ma_df$log2FoldChange),
-]
-
-
-ma_df$significance <- "Not Significant"
-
-ma_df$significance[
-  ma_df$padj < 0.05
-] <- "Significant"
-
-
-ma_plot <- ggplot(
-
-  ma_df,
-
-  aes(
-
-    x = log10(
-      baseMean + 1
-    ),
-
-    y = log2FoldChange
-
-  )
-
-) +
-
-  geom_point(
-
-    aes(
-      color = significance
-    ),
-
-    alpha = 0.6,
-
-    size = 2
-
-  ) +
-
-  scale_color_manual(
-
-    values = c(
-
-      "Significant" = "red",
-
-      "Not Significant" = "grey"
-
+    abundance = pd.read_csv(
+        abundance_file,
+        sep="\t",
+        dtype=object
     )
 
-  ) +
-
-  theme_minimal() +
-
-  labs(
-
-    title = "MA Plot: COVID-19 vs Healthy",
-
-    x = "Log10 Mean Abundance",
-
-    y = "Log2 Fold Change"
-
-  )
-
-
-ma_plot
-
-
-ggsave(
-
-  "COVID19_MA_plot.png",
-
-  plot = ma_plot,
-
-  width = 8,
-
-  height = 6,
-
-  dpi = 300
-
-)
-
-
-ggsave(
-
-  "COVID19_MA_plot.pdf",
-
-  plot = ma_plot,
-
-  width = 8,
-
-  height = 6
-
-)
-
-
-# ============================================================
-# HEATMAP OF SIGNIFICANT MICROBES
-# ============================================================
-
-sig <- res[
-  which(
-    res$padj < 0.05
-  ),
-]
-
-
-sig <- sig[
-  !is.na(sig$padj),
-]
-
-
-if (
-  nrow(sig) < 10
-) {
-
-  sig <- res[
-    order(
-      res$padj
-    ),
-  ][1:50, ]
-
-}
-
-
-vsd_mat <- assay(
-  vsd
-)
-
-
-sig_mat <- vsd_mat[
-  rownames(sig),
-]
-
-
-annotation_col <- data.frame(
-
-  Condition = colData(dds)$condition
-
-)
-
-
-rownames(
-  annotation_col
-) <- colnames(
-  vsd_mat
-)
-
-
-pdf(
-
-  "COVID19_heatmap.pdf",
-
-  width = 8,
-
-  height = 6
-
-)
-
-
-pheatmap(
-
-  sig_mat,
-
-  scale = "row",
-
-  annotation_col = annotation_col,
-
-  show_rownames = FALSE,
-
-  clustering_distance_rows = "euclidean",
-
-  clustering_distance_cols = "euclidean",
-
-  clustering_method = "complete",
-
-  main = "Significant Microbes Heatmap: COVID-19 vs Healthy"
-
-)
-
-
-dev.off()
-
-
-# ============================================================
-# IDENTIFY CASE- AND CONTROL-ASSOCIATED MICROBES
-# ============================================================
-
-res_df <- res_df[
-  !is.na(res_df$padj),
-]
-
-
-covid_enriched <- res_df[
-  res_df$log2FoldChange > 0,
-]
-
-
-covid_enriched <- covid_enriched[
-  order(
-    -covid_enriched$log2FoldChange
-  ),
-]
-
-
-healthy_enriched <- res_df[
-  res_df$log2FoldChange < 0,
-]
-
-
-healthy_enriched <- healthy_enriched[
-  order(
-    healthy_enriched$log2FoldChange
-  ),
-]
-
-
-head(
-  covid_enriched,
-  10
-)
-
-
-head(
-  healthy_enriched,
-  10
-)
-
-
-# ============================================================
-# SAVE RESULT TABLES
-# ============================================================
-
-write.csv(
-
-  covid_enriched,
-
-  "Top_COVID19_enriched_microbes.csv"
-
-)
-
-
-write.csv(
-
-  healthy_enriched,
-
-  "Top_Healthy_enriched_microbes_COVID19.csv"
-
-)
-
-
-write.csv(
-
-  res_df,
-
-  "COVID19_full_DESeq2_results.csv"
-
-)
-
-
-write.csv(
-
-  sig_res,
-
-  "COVID19_significant_DESeq2_results.csv"
-
-)
-
-
-# ============================================================
-# ANALYSIS COMPLETED
-# ============================================================
+    metadata = pd.read_excel(
+        metadata_file,
+        dtype=object
+    )
+
+    # ------------------------------------------------------------
+    # BASIC CHECKS
+    # ------------------------------------------------------------
+
+    if "name" not in abundance.columns:
+        raise ValueError(
+            f"{disease}: abundance matrix has no 'name' column."
+        )
+
+    if "run id" not in metadata.columns:
+        raise ValueError(
+            f"{disease}: metadata has no 'run id' column."
+        )
+
+    if "label" not in metadata.columns:
+        raise ValueError(
+            f"{disease}: metadata has no 'label' column."
+        )
+
+    # ------------------------------------------------------------
+    # CLEAN SAMPLE IDs
+    # ------------------------------------------------------------
+
+    abundance["name"] = (
+        abundance["name"]
+        .astype(str)
+        .str.strip()
+    )
+
+    metadata["run id"] = (
+        metadata["run id"]
+        .astype(str)
+        .str.strip()
+    )
+
+    metadata["label"] = (
+        metadata["label"]
+        .apply(clean_label)
+    )
+
+    # ------------------------------------------------------------
+    # SAMPLE COUNT
+    # ------------------------------------------------------------
+
+    if len(abundance) != 20:
+        raise ValueError(
+            f"{disease}: abundance has {len(abundance)} samples; "
+            f"expected 20."
+        )
+
+    if len(metadata) != 20:
+        raise ValueError(
+            f"{disease}: metadata has {len(metadata)} samples; "
+            f"expected 20."
+        )
+
+    # ------------------------------------------------------------
+    # LABEL CHECK
+    # ------------------------------------------------------------
+
+    if metadata["label"].isna().any():
+
+        raise ValueError(
+            f"{disease}: invalid/missing labels:\n"
+            f"{metadata['label'].tolist()}"
+        )
+
+    metadata["label"] = (
+        metadata["label"]
+        .astype(int)
+    )
+
+    if set(metadata["label"]) != {0, 1}:
+
+        raise ValueError(
+            f"{disease}: labels are not exactly 0 and 1."
+        )
+
+    healthy_n = int(
+        (metadata["label"] == 0).sum()
+    )
+
+    disease_n = int(
+        (metadata["label"] == 1).sum()
+    )
+
+    if healthy_n != 10 or disease_n != 10:
+
+        raise ValueError(
+            f"{disease}: expected 10 healthy + 10 disease; "
+            f"found {healthy_n} healthy + {disease_n} disease."
+        )
+
+    # ------------------------------------------------------------
+    # SAMPLE ID MATCH
+    # ------------------------------------------------------------
+
+    abundance_ids = set(
+        abundance["name"]
+    )
+
+    metadata_ids = set(
+        metadata["run id"]
+    )
+
+    if abundance_ids != metadata_ids:
+
+        missing_in_abundance = (
+            metadata_ids - abundance_ids
+        )
+
+        missing_in_metadata = (
+            abundance_ids - metadata_ids
+        )
+
+        raise ValueError(
+            f"{disease}: sample IDs do not match.\n"
+            f"Missing in abundance: {missing_in_abundance}\n"
+            f"Missing in metadata: {missing_in_metadata}"
+        )
+
+    # ------------------------------------------------------------
+    # HOMO SAPIENS CHECK
+    # ------------------------------------------------------------
+
+    abundance_taxa = [
+        str(c).strip()
+        for c in abundance.columns
+        if c != "name"
+    ]
+
+    human_matches = [
+        x for x in abundance_taxa
+        if x.lower() == "homo sapiens"
+    ]
+
+    if human_matches:
+
+        raise ValueError(
+            f"{disease}: Homo sapiens is STILL PRESENT."
+        )
+
+    # ------------------------------------------------------------
+    # ZERO TAXA CHECK
+    # ------------------------------------------------------------
+
+    numeric = abundance[
+        abundance_taxa
+    ].apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    zero_taxa = [
+        c for c in numeric.columns
+        if numeric[c].fillna(0).sum() == 0
+    ]
+
+    # Corrected matrices should already have these removed.
+    if zero_taxa:
+
+        raise ValueError(
+            f"{disease}: completely-zero taxa remain:\n"
+            f"{zero_taxa[:20]}"
+        )
+
+    # ------------------------------------------------------------
+    # STORE
+    # ------------------------------------------------------------
+
+    validated[disease] = {
+        "abundance": abundance_file,
+        "metadata": metadata_file,
+        "samples": 20,
+        "healthy": healthy_n,
+        "disease": disease_n,
+        "taxa": len(abundance_taxa)
+    }
+
+    print(
+        f"{disease:25s} | "
+        f"samples=20 | "
+        f"healthy={healthy_n} | "
+        f"disease={disease_n} | "
+        f"microbial_taxa={len(abundance_taxa)} | "
+        f"Homo_sapiens=ABSENT | VERIFIED"
+    )
+
+
+# ================================================================
+# FINAL LOCK
+# ================================================================
+
+print("\n" + "=" * 100)
+print("ALL 10 CORRECTED DESeq2 INPUTS VERIFIED")
+print("=" * 100)
 
 print(
-  "COVID-19 DESeq2 analysis completed successfully."
+    "\nThese exact corrected matrices will be used for DESeq2."
 )
+
+print(
+    "Homo sapiens: ABSENT from all 10 datasets."
+)
+
+print(
+    "Sample structure: 10 healthy + 10 disease for every dataset."
+)
+
+print(
+    "No ML or SHAP will be rerun."
+)
+
+print(
+    "\nINPUT VALIDATION PASSED."
+)
+
+
+
+
+
+# ================================================================
+# DIAGNOSTIC — EXACT SAMPLE IDs IN AUTISM
+# ================================================================
+
+import pandas as pd
+import os
+
+abundance_file = (
+    "/content/CORRECTED_MICROBIAL_ABUNDANCE/"
+    "Autism_CORRECTED_MICROBIAL_ABUNDANCE.tabular"
+)
+
+metadata_file = "/content/autism spectrum phenotype.xlsx"
+
+ab = pd.read_csv(
+    abundance_file,
+    sep="\t",
+    dtype=str
+)
+
+md = pd.read_excel(
+    metadata_file,
+    dtype=str
+)
+
+print("=" * 100)
+print("AUTISM — EXACT SAMPLE ID CHECK")
+print("=" * 100)
+
+print("\nABUNDANCE SHAPE:", ab.shape)
+print("ABUNDANCE COLUMNS:", list(ab.columns[:5]))
+
+print("\nMETADATA COLUMNS:")
+print(list(md.columns))
+
+print("\n" + "-" * 100)
+print("ABUNDANCE 'name' VALUES — EXACT REPRESENTATION")
+print("-" * 100)
+
+for i, x in enumerate(ab["name"].tolist()):
+    print(i + 1, repr(x))
+
+print("\n" + "-" * 100)
+print("METADATA 'run id' VALUES — EXACT REPRESENTATION")
+print("-" * 100)
+
+for i, x in enumerate(md["run id"].tolist()):
+    print(i + 1, repr(x))
+
+print("\n" + "-" * 100)
+print("SET COMPARISON")
+print("-" * 100)
+
+ab_ids = set(
+    ab["name"].astype(str).str.strip()
+)
+
+md_ids = set(
+    md["run id"].astype(str).str.strip()
+)
+
+print("\nIn abundance but NOT metadata:")
+print(
+    sorted(ab_ids - md_ids)
+)
+
+print("\nIn metadata but NOT abundance:")
+print(
+    sorted(md_ids - ab_ids)
+)
+
+print("\nNumber abundance IDs:", len(ab_ids))
+print("Number metadata IDs:", len(md_ids))
+print("Exact set match:", ab_ids == md_ids)
+
+
+
+
+# ================================================================
+# FINAL CORRECTED DESeq2 — ROBUST SAMPLE-ID CLEANING
+# ================================================================
+
+import os
+import subprocess
+
+OUTDIR = "/content/CORRECTED_DESEQ2_RESULTS"
+os.makedirs(OUTDIR, exist_ok=True)
+
+r_script = r'''
+suppressPackageStartupMessages({
+    library(DESeq2)
+    library(readxl)
+})
+
+base_dir <- "/content/CORRECTED_MICROBIAL_ABUNDANCE"
+out_dir  <- "/content/CORRECTED_DESEQ2_RESULTS"
+
+diseases <- c(
+    "Autism",
+    "Colorectal_Neoplasm",
+    "COVID19",
+    "Dwarfism",
+    "Fatigue",
+    "Fibromyalgia",
+    "IBS",
+    "Neuroblastoma",
+    "Obesity",
+    "Ulcerative_Colitis"
+)
+
+metadata_files <- c(
+    Autism="/content/autism spectrum phenotype.xlsx",
+    Colorectal_Neoplasm="/content/colorectal neoplasm phenotype.xlsx",
+    COVID19="/content/covid phenotype.xlsx",
+    Dwarfism="/content/dwarfism phenotype.xlsx",
+    Fatigue="/content/fatigue syndrome phenotype.xlsx",
+    Fibromyalgia="/content/fibromyalgia phenotype.xlsx",
+    IBS="/content/ibs phenotype.txt.xlsx",
+    Neuroblastoma="/content/neuroblastoma phenotype.xlsx",
+    Obesity="/content/obesity phenotype.xlsx",
+    Ulcerative_Colitis="/content/ulcerative colitis phenotype.xlsx"
+)
+
+# ---------------------------------------------------------------
+# ROBUST SAMPLE-ID CLEANING
+# ---------------------------------------------------------------
+
+clean_sample_id <- function(x) {
+
+    x <- as.character(x)
+
+    # Normal ASCII whitespace
+    x <- gsub("[[:space:]]", "", x)
+
+    # Explicit Unicode whitespace found in your metadata
+    x <- gsub("\u00A0", "", x, fixed=TRUE)  # non-breaking space
+    x <- gsub("\u2009", "", x, fixed=TRUE)  # thin space
+    x <- gsub("\u200A", "", x, fixed=TRUE)  # hair space
+
+    # Zero-width characters
+    x <- gsub("\u200B", "", x, fixed=TRUE)
+    x <- gsub("\u200C", "", x, fixed=TRUE)
+    x <- gsub("\u200D", "", x, fixed=TRUE)
+    x <- gsub("\u2060", "", x, fixed=TRUE)
+    x <- gsub("\uFEFF", "", x, fixed=TRUE)
+
+    trimws(x)
+}
+
+
+clean_label <- function(x) {
+
+    x <- clean_sample_id(x)
+
+    out <- rep(NA_integer_, length(x))
+
+    out[x %in% c("0", "0.0")] <- 0L
+    out[x %in% c("1", "1.0")] <- 1L
+
+    return(out)
+}
+
+
+summary_list <- list()
+
+for (disease in diseases) {
+
+    cat("\n")
+    cat("============================================================\n")
+    cat("DESeq2:", disease, "\n")
+    cat("============================================================\n")
+
+    abundance_file <- file.path(
+        base_dir,
+        paste0(
+            disease,
+            "_CORRECTED_MICROBIAL_ABUNDANCE.tabular"
+        )
+    )
+
+    metadata_file <- metadata_files[[disease]]
+
+    if (!file.exists(abundance_file))
+        stop(paste("Missing abundance:", abundance_file))
+
+    if (!file.exists(metadata_file))
+        stop(paste("Missing metadata:", metadata_file))
+
+    # -----------------------------------------------------------
+    # READ CORRECTED ABUNDANCE
+    # -----------------------------------------------------------
+
+    raw <- read.delim(
+        abundance_file,
+        header=TRUE,
+        sep="\t",
+        check.names=FALSE,
+        stringsAsFactors=FALSE
+    )
+
+    if (!"name" %in% colnames(raw))
+        stop(paste(disease, ": no 'name' column."))
+
+    abundance_sample_ids <- clean_sample_id(
+        raw$name
+    )
+
+    raw$name <- NULL
+
+    # -----------------------------------------------------------
+    # READ METADATA
+    # -----------------------------------------------------------
+
+    metadata <- readxl::read_excel(
+        metadata_file
+    )
+
+    metadata <- as.data.frame(
+        metadata,
+        stringsAsFactors=FALSE
+    )
+
+    if (!"run id" %in% colnames(metadata))
+        stop(paste(disease, ": metadata has no 'run id'."))
+
+    if (!"label" %in% colnames(metadata))
+        stop(paste(disease, ": metadata has no 'label'."))
+
+    metadata_sample_ids <- clean_sample_id(
+        metadata[["run id"]]
+    )
+
+    metadata$label <- clean_label(
+        metadata$label
+    )
+
+    if (any(is.na(metadata$label)))
+        stop(paste(disease, ": invalid labels."))
+
+    # -----------------------------------------------------------
+    # SAMPLE VALIDATION
+    # -----------------------------------------------------------
+
+    if (length(abundance_sample_ids) != 20)
+        stop(
+            paste(
+                disease,
+                ": abundance does not contain 20 samples."
+            )
+        )
+
+    if (length(metadata_sample_ids) != 20)
+        stop(
+            paste(
+                disease,
+                ": metadata does not contain 20 samples."
+            )
+        )
+
+    if (anyDuplicated(abundance_sample_ids))
+        stop(
+            paste(
+                disease,
+                ": duplicate abundance sample IDs."
+            )
+        )
+
+    if (anyDuplicated(metadata_sample_ids))
+        stop(
+            paste(
+                disease,
+                ": duplicate metadata sample IDs."
+            )
+        )
+
+    if (!setequal(
+        abundance_sample_ids,
+        metadata_sample_ids
+    )) {
+
+        stop(
+            paste(
+                disease,
+                ": sample IDs still do not match after cleaning."
+            )
+        )
+    }
+
+    # -----------------------------------------------------------
+    # REORDER ABUNDANCE TO METADATA ORDER
+    # -----------------------------------------------------------
+
+    row_order <- match(
+        metadata_sample_ids,
+        abundance_sample_ids
+    )
+
+    raw <- raw[
+        row_order,
+        ,
+        drop=FALSE
+    ]
+
+    # -----------------------------------------------------------
+    # HOMO SAPIENS CHECK
+    # -----------------------------------------------------------
+
+    if (
+        any(
+            tolower(
+                trimws(
+                    colnames(raw)
+                )
+            ) == "homo sapiens"
+        )
+    ) {
+        stop(
+            paste(
+                disease,
+                ": Homo sapiens is still present."
+            )
+        )
+    }
+
+    # -----------------------------------------------------------
+    # TAXA
+    # -----------------------------------------------------------
+
+    taxa <- trimws(
+        colnames(raw)
+    )
+
+    if (any(taxa == ""))
+        stop(
+            paste(
+                disease,
+                ": blank taxon name detected."
+            )
+        )
+
+    if (anyDuplicated(taxa))
+        stop(
+            paste(
+                disease,
+                ": duplicate taxa detected."
+            )
+        )
+
+    # -----------------------------------------------------------
+    # NUMERIC COUNTS
+    # -----------------------------------------------------------
+
+    raw[] <- lapply(
+        raw,
+        function(x) as.numeric(
+            as.character(x)
+        )
+    )
+
+    if (any(is.na(as.matrix(raw))))
+        stop(
+            paste(
+                disease,
+                ": NA values in count matrix."
+            )
+        )
+
+    if (any(as.matrix(raw) < 0))
+        stop(
+            paste(
+                disease,
+                ": negative counts."
+            )
+        )
+
+    mat <- as.matrix(raw)
+
+    if (
+        any(
+            abs(mat - round(mat)) > 1e-8
+        )
+    ) {
+        stop(
+            paste(
+                disease,
+                ": non-integer counts detected."
+            )
+        )
+    }
+
+    mat <- round(mat)
+
+    # -----------------------------------------------------------
+    # TRANSPOSE
+    #
+    # Corrected abundance:
+    #   rows    = samples
+    #   columns = taxa
+    #
+    # DESeq2:
+    #   rows    = taxa
+    #   columns = samples
+    # -----------------------------------------------------------
+
+    count_matrix <- t(mat)
+
+    rownames(count_matrix) <- taxa
+    colnames(count_matrix) <- metadata_sample_ids
+
+    # -----------------------------------------------------------
+    # REMOVE ZERO-SUM TAXA
+    # -----------------------------------------------------------
+
+    keep <- rowSums(count_matrix) > 0
+
+    count_matrix <- count_matrix[
+        keep,
+        ,
+        drop=FALSE
+    ]
+
+    # -----------------------------------------------------------
+    # FINAL CHECK
+    # -----------------------------------------------------------
+
+    if (ncol(count_matrix) != 20)
+        stop(
+            paste(
+                disease,
+                ": final matrix does not contain 20 samples."
+            )
+        )
+
+    if (!setequal(
+        colnames(count_matrix),
+        metadata_sample_ids
+    ))
+        stop(
+            paste(
+                disease,
+                ": final matrix sample IDs mismatch."
+            )
+        )
+
+    if (
+        sum(metadata$label == 0) != 10 ||
+        sum(metadata$label == 1) != 10
+    ) {
+        stop(
+            paste(
+                disease,
+                ": expected 10 Healthy + 10 Disease."
+            )
+        )
+    }
+
+    # -----------------------------------------------------------
+    # DESeq2 METADATA
+    # -----------------------------------------------------------
+
+    col_data <- data.frame(
+        condition=factor(
+            ifelse(
+                metadata$label == 1,
+                "Disease",
+                "Healthy"
+            ),
+            levels=c(
+                "Healthy",
+                "Disease"
+            )
+        ),
+        row.names=metadata_sample_ids
+    )
+
+    # -----------------------------------------------------------
+    # RUN DESeq2
+    # -----------------------------------------------------------
+
+    dds <- DESeqDataSetFromMatrix(
+        countData=count_matrix,
+        colData=col_data,
+        design=~ condition
+    )
+
+    dds <- DESeq(
+        dds,
+        quiet=TRUE
+    )
+
+    res <- results(
+        dds,
+        contrast=c(
+            "condition",
+            "Disease",
+            "Healthy"
+        ),
+        alpha=0.05
+    )
+
+    # -----------------------------------------------------------
+    # RESULTS
+    # -----------------------------------------------------------
+
+    result_df <- as.data.frame(res)
+
+    result_df$microbe <- rownames(
+        result_df
+    )
+
+    result_df <- result_df[
+        ,
+        c(
+            "microbe",
+            "baseMean",
+            "log2FoldChange",
+            "lfcSE",
+            "stat",
+            "pvalue",
+            "padj"
+        )
+    ]
+
+    result_df <- result_df[
+        order(
+            result_df$padj,
+            na.last=TRUE
+        ),
+        ,
+        drop=FALSE
+    ]
+
+    output_file <- file.path(
+        out_dir,
+        paste0(
+            disease,
+            "_CORRECTED_full_DESeq2_results.csv"
+        )
+    )
+
+    write.csv(
+        result_df,
+        output_file,
+        row.names=FALSE
+    )
+
+    # -----------------------------------------------------------
+    # SUMMARY
+    # -----------------------------------------------------------
+
+    sig <- (
+        !is.na(result_df$padj)
+        &
+        result_df$padj < 0.05
+    )
+
+    up <- (
+        sig
+        &
+        result_df$log2FoldChange > 0
+    )
+
+    down <- (
+        sig
+        &
+        result_df$log2FoldChange < 0
+    )
+
+    summary_list[[disease]] <- data.frame(
+        Disease=disease,
+        Samples=20,
+        Healthy=10,
+        Disease_samples=10,
+        Taxa_tested=nrow(result_df),
+        Significant_padj_lt_0_05=sum(sig),
+        Upregulated=sum(up),
+        Downregulated=sum(down)
+    )
+
+    cat(
+        "Samples: 20 | ",
+        "Taxa: ", nrow(result_df),
+        " | Significant: ", sum(sig),
+        " | Up: ", sum(up),
+        " | Down: ", sum(down),
+        "\n",
+        sep=""
+    )
+
+    cat(
+        "SAVED: ",
+        output_file,
+        "\n",
+        sep=""
+    )
+}
+
+# ================================================================
+# MASTER QC
+# ================================================================
+
+summary_df <- do.call(
+    rbind,
+    summary_list
+)
+
+summary_file <- file.path(
+    out_dir,
+    "CORRECTED_DESeq2_QC_SUMMARY.csv"
+)
+
+write.csv(
+    summary_df,
+    summary_file,
+    row.names=FALSE
+)
+
+cat("\n")
+cat("============================================================\n")
+cat("ALL 10 CORRECTED DESeq2 ANALYSES COMPLETED\n")
+cat("============================================================\n")
+
+print(
+    summary_df,
+    row.names=FALSE
+)
+
+cat("\nOutput folder:\n")
+cat(out_dir, "\n")
+'''
+
+script_path = "/content/run_corrected_deseq2_FINAL.R"
+
+with open(script_path, "w") as f:
+    f.write(r_script)
+
+print("Running FINAL corrected DESeq2...")
+print("Metadata Unicode sample-ID cleaning is enabled.\n")
+
+run = subprocess.run(
+    ["Rscript", script_path],
+    capture_output=True,
+    text=True
+)
+
+print(run.stdout)
+
+if run.returncode != 0:
+    print("\nDESeq2 ERROR:\n")
+    print(run.stderr)
+    raise RuntimeError(
+        "DESeq2 failed. No downstream analysis was performed."
+    )
+
+print("\n============================================================")
+print("ALL 10 CORRECTED DESeq2 RUNS COMPLETED SUCCESSFULLY")
+print("============================================================")
+print("\nSaved to:")
+print(OUTDIR)
+
+
+
+
+
+
+
+
+
+
+# ================================================================
+# STEP — CORRECTED DESeq2 → TOP-100 → 45 DISEASE PAIRS
+# ================================================================
+
+import os
+import re
+import itertools
+import numpy as np
+import pandas as pd
+
+DESEQ_DIR = "/content/CORRECTED_DESEQ2_RESULTS"
+
+OUTDIR = "/content/CORRECTED_DESEQ2_DISEASE_SIMILARITY"
+
+os.makedirs(OUTDIR, exist_ok=True)
+
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "COVID19",
+    "Dwarfism",
+    "Fatigue",
+    "Fibromyalgia",
+    "IBS",
+    "Neuroblastoma",
+    "Obesity",
+    "Ulcerative_Colitis"
+]
+
+TOP_N = 100
+
+
+# ================================================================
+# HELPERS
+# ================================================================
+
+def clean_taxon(x):
+
+    if pd.isna(x):
+        return ""
+
+    x = str(x).strip()
+
+    for c in [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060"
+    ]:
+        x = x.replace(c, "")
+
+    x = re.sub(r"\s+", " ", x)
+
+    return x
+
+
+def find_column(df, candidates):
+
+    exact = {
+        str(c).strip().lower(): c
+        for c in df.columns
+    }
+
+    for candidate in candidates:
+
+        if candidate.lower() in exact:
+            return exact[candidate.lower()]
+
+    for c in df.columns:
+
+        name = str(c).strip().lower()
+
+        for candidate in candidates:
+
+            if candidate.lower() in name:
+                return c
+
+    return None
+
+
+# ================================================================
+# VERIFY ALL 10 DESeq2 FILES
+# ================================================================
+
+print("=" * 100)
+print("VERIFYING CORRECTED DESeq2 RESULTS")
+print("=" * 100)
+
+files_found = {}
+
+for disease in DISEASES:
+
+    path = os.path.join(
+        DESEQ_DIR,
+        f"{disease}_CORRECTED_full_DESeq2_results.csv"
+    )
+
+    if not os.path.exists(path):
+
+        raise FileNotFoundError(
+            f"{disease}: missing corrected DESeq2 file:\n{path}"
+        )
+
+    files_found[disease] = path
+
+    print(
+        f"{disease:25s} | FOUND"
+    )
+
+
+# ================================================================
+# TOP-100 STORAGE
+# ================================================================
+
+case_sets = {}
+control_sets = {}
+
+case_tables = {}
+control_tables = {}
+
+
+# ================================================================
+# PROCESS EACH DISEASE
+# ================================================================
+
+for disease in DISEASES:
+
+    print("\n" + "=" * 100)
+    print(disease.upper())
+    print("=" * 100)
+
+    df = pd.read_csv(
+        files_found[disease]
+    )
+
+    taxon_col = find_column(
+        df,
+        [
+            "microbe",
+            "species",
+            "taxa",
+            "taxon",
+            "feature",
+            "name"
+        ]
+    )
+
+    if taxon_col is None:
+        raise ValueError(
+            f"{disease}: taxon column not found."
+        )
+
+    lfc_col = find_column(
+        df,
+        [
+            "log2FoldChange",
+            "log2foldchange",
+            "lfc"
+        ]
+    )
+
+    se_col = find_column(
+        df,
+        [
+            "lfcSE",
+            "lfcse"
+        ]
+    )
+
+    if lfc_col is None:
+        raise ValueError(
+            f"{disease}: log2FoldChange missing."
+        )
+
+    if se_col is None:
+        raise ValueError(
+            f"{disease}: lfcSE missing."
+        )
+
+    work = df[
+        [
+            taxon_col,
+            lfc_col,
+            se_col
+        ]
+    ].copy()
+
+    work.columns = [
+        "microbe",
+        "log2FoldChange",
+        "lfcSE"
+    ]
+
+    work["microbe"] = (
+        work["microbe"]
+        .apply(clean_taxon)
+    )
+
+    work["log2FoldChange"] = pd.to_numeric(
+        work["log2FoldChange"],
+        errors="coerce"
+    )
+
+    work["lfcSE"] = pd.to_numeric(
+        work["lfcSE"],
+        errors="coerce"
+    )
+
+    work = work[
+        (work["microbe"] != "")
+        &
+        work["log2FoldChange"].notna()
+        &
+        work["lfcSE"].notna()
+    ].copy()
+
+    if work["microbe"].duplicated().any():
+
+        raise ValueError(
+            f"{disease}: duplicate taxa detected."
+        )
+
+    # ------------------------------------------------------------
+    # 95% CONFIDENCE INTERVAL
+    # ------------------------------------------------------------
+
+    work["CI_lower_95"] = (
+        work["log2FoldChange"]
+        -
+        1.96 * work["lfcSE"]
+    )
+
+    work["CI_upper_95"] = (
+        work["log2FoldChange"]
+        +
+        1.96 * work["lfcSE"]
+    )
+
+    # ------------------------------------------------------------
+    # CASE-ASSOCIATED
+    #
+    # Highest lower confidence bounds
+    # ------------------------------------------------------------
+
+    case = (
+        work
+        .sort_values(
+            [
+                "CI_lower_95",
+                "log2FoldChange"
+            ],
+            ascending=[False, False]
+        )
+        .head(TOP_N)
+        .copy()
+    )
+
+    case.insert(
+        0,
+        "Case_rank",
+        range(1, len(case) + 1)
+    )
+
+    case["Disease"] = disease
+    case["Association"] = "Case-associated"
+
+    # ------------------------------------------------------------
+    # CONTROL-ASSOCIATED
+    #
+    # Lowest upper confidence bounds
+    # ------------------------------------------------------------
+
+    control = (
+        work
+        .sort_values(
+            [
+                "CI_upper_95",
+                "log2FoldChange"
+            ],
+            ascending=[True, True]
+        )
+        .head(TOP_N)
+        .copy()
+    )
+
+    control.insert(
+        0,
+        "Control_rank",
+        range(1, len(control) + 1)
+    )
+
+    control["Disease"] = disease
+    control["Association"] = "Control-associated"
+
+    # ------------------------------------------------------------
+    # VALIDATION
+    # ------------------------------------------------------------
+
+    if len(case) != 100:
+        raise ValueError(
+            f"{disease}: case set has {len(case)} taxa."
+        )
+
+    if len(control) != 100:
+        raise ValueError(
+            f"{disease}: control set has {len(control)} taxa."
+        )
+
+    # ------------------------------------------------------------
+    # SAVE
+    # ------------------------------------------------------------
+
+    case.to_csv(
+        os.path.join(
+            OUTDIR,
+            f"{disease}_TOP100_CASE_ASSOCIATED_CORRECTED.csv"
+        ),
+        index=False
+    )
+
+    control.to_csv(
+        os.path.join(
+            OUTDIR,
+            f"{disease}_TOP100_CONTROL_ASSOCIATED_CORRECTED.csv"
+        ),
+        index=False
+    )
+
+    case_tables[disease] = case
+    control_tables[disease] = control
+
+    case_sets[disease] = set(
+        case["microbe"]
+    )
+
+    control_sets[disease] = set(
+        control["microbe"]
+    )
+
+    print(
+        "DESeq2 taxa:",
+        len(work)
+    )
+
+    print(
+        "Case top-100:",
+        len(case_sets[disease])
+    )
+
+    print(
+        "Control top-100:",
+        len(control_sets[disease])
+    )
+
+
+# ================================================================
+# ALL 45 DISEASE PAIRS
+# ================================================================
+
+pair_rows = []
+
+for disease_a, disease_b in itertools.combinations(
+    DISEASES,
+    2
+):
+
+    case_overlap = (
+        case_sets[disease_a]
+        &
+        case_sets[disease_b]
+    )
+
+    control_overlap = (
+        control_sets[disease_a]
+        &
+        control_sets[disease_b]
+    )
+
+    combined_overlap = (
+        case_overlap
+        |
+        control_overlap
+    )
+
+    pair_rows.append({
+
+        "Disease_A":
+            disease_a,
+
+        "Disease_B":
+            disease_b,
+
+        "Case_overlap_n":
+            len(case_overlap),
+
+        "Control_overlap_n":
+            len(control_overlap),
+
+        "Combined_overlap_n":
+            len(combined_overlap)
+    })
+
+
+pairs = pd.DataFrame(
+    pair_rows
+)
+
+if len(pairs) != 45:
+
+    raise ValueError(
+        f"Expected 45 disease pairs; got {len(pairs)}."
+    )
+
+
+# ================================================================
+# RANKINGS
+# ================================================================
+
+case_ranked = (
+    pairs
+    .sort_values(
+        [
+            "Case_overlap_n",
+            "Control_overlap_n"
+        ],
+        ascending=False
+    )
+    .reset_index(drop=True)
+)
+
+control_ranked = (
+    pairs
+    .sort_values(
+        [
+            "Control_overlap_n",
+            "Case_overlap_n"
+        ],
+        ascending=False
+    )
+    .reset_index(drop=True)
+)
+
+combined_ranked = (
+    pairs
+    .sort_values(
+        [
+            "Combined_overlap_n",
+            "Case_overlap_n",
+            "Control_overlap_n"
+        ],
+        ascending=False
+    )
+    .reset_index(drop=True)
+)
+
+
+# ================================================================
+# SAVE PAIR RESULTS
+# ================================================================
+
+pairs.to_csv(
+    os.path.join(
+        OUTDIR,
+        "CORRECTED_ALL_45_DISEASE_PAIRS_OVERLAP.csv"
+    ),
+    index=False
+)
+
+case_ranked.to_csv(
+    os.path.join(
+        OUTDIR,
+        "CORRECTED_CASE_OVERLAP_RANKED_45_PAIRS.csv"
+    ),
+    index=False
+)
+
+control_ranked.to_csv(
+    os.path.join(
+        OUTDIR,
+        "CORRECTED_CONTROL_OVERLAP_RANKED_45_PAIRS.csv"
+    ),
+    index=False
+)
+
+combined_ranked.to_csv(
+    os.path.join(
+        OUTDIR,
+        "CORRECTED_COMBINED_OVERLAP_RANKED_45_PAIRS.csv"
+    ),
+    index=False
+)
+
+
+# ================================================================
+# MASTER TOP-100 TABLES
+# ================================================================
+
+all_case = pd.concat(
+    case_tables.values(),
+    ignore_index=True
+)
+
+all_control = pd.concat(
+    control_tables.values(),
+    ignore_index=True
+)
+
+all_case.to_csv(
+    os.path.join(
+        OUTDIR,
+        "CORRECTED_ALL_DISEASES_TOP100_CASE_ASSOCIATED.csv"
+    ),
+    index=False
+)
+
+all_control.to_csv(
+    os.path.join(
+        OUTDIR,
+        "CORRECTED_ALL_DISEASES_TOP100_CONTROL_ASSOCIATED.csv"
+    ),
+    index=False
+)
+
+
+# ================================================================
+# FINAL OUTPUT
+# ================================================================
+
+print("\n")
+print("=" * 100)
+print("CORRECTED DESeq2 DISEASE-SIMILARITY ANALYSIS COMPLETED")
+print("=" * 100)
+
+print(
+    "Diseases:",
+    len(DISEASES)
+)
+
+print(
+    "Disease pairs:",
+    len(pairs)
+)
+
+print("\nTOP 15 COMBINED OVERLAPS:")
+print(
+    combined_ranked.head(15)
+    .to_string(index=False)
+)
+
+print("\nSaved to:")
+print(OUTDIR)
+
+print("\nNO ML RERUN.")
+print("NO SHAP RERUN.")
+print("NO DESeq2 RERUN.")
+
+
+
+
+
+# ================================================================
+# FINAL CORRECTED SHAP + CORRECTED DESeq2 INTEGRATION
+# ================================================================
+
+import os
+import re
+import shutil
+import numpy as np
+import pandas as pd
+from google.colab import files
+
+SHAP_DIR = "/content/FINAL_REFERENCE_ALIGNED_RF_SHAP"
+DESEQ_DIR = "/content/CORRECTED_DESEQ2_RESULTS"
+OUTDIR = "/content/FINAL_CORRECTED_SHAP_DESEQ2_INTEGRATION"
+
+os.makedirs(OUTDIR, exist_ok=True)
+
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "COVID19",
+    "Dwarfism",
+    "Neuroblastoma",
+    "Obesity"
+]
+
+PADJ_THRESHOLD = 0.05
+
+
+# ================================================================
+# HELPERS
+# ================================================================
+
+def normalize_taxon(x):
+
+    if pd.isna(x):
+        return ""
+
+    s = str(x).strip()
+
+    for c in [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060"
+    ]:
+        s = s.replace(c, "")
+
+    s = re.sub(r"\s+", " ", s)
+
+    return s
+
+
+def find_column(df, candidates):
+
+    exact = {
+        str(c).strip().lower(): c
+        for c in df.columns
+    }
+
+    for x in candidates:
+        if x.lower() in exact:
+            return exact[x.lower()]
+
+    for c in df.columns:
+        name = str(c).strip().lower()
+
+        for x in candidates:
+            if x.lower() in name:
+                return c
+
+    return None
+
+
+# ================================================================
+# VERIFY INPUTS
+# ================================================================
+
+print("=" * 100)
+print("VERIFYING CORRECTED SHAP + DESeq2 INPUTS")
+print("=" * 100)
+
+for disease in DISEASES:
+
+    ddir = os.path.join(
+        SHAP_DIR,
+        disease
+    )
+
+    if not os.path.isdir(ddir):
+        raise FileNotFoundError(
+            f"{disease}: SHAP directory missing:\n{ddir}"
+        )
+
+    # Find the existing SHAP summary automatically
+    shap_candidates = [
+        f for f in os.listdir(ddir)
+        if "SHAP" in f.upper()
+        and "SUMMARY" in f.upper()
+        and f.lower().endswith(".csv")
+    ]
+
+    if not shap_candidates:
+        raise FileNotFoundError(
+            f"{disease}: SHAP summary CSV not found."
+        )
+
+    # Find corrected DESeq2
+    deseq_file = os.path.join(
+        DESEQ_DIR,
+        f"{disease}_CORRECTED_full_DESeq2_results.csv"
+    )
+
+    if not os.path.exists(deseq_file):
+        raise FileNotFoundError(
+            f"{disease}: corrected DESeq2 file missing:\n"
+            f"{deseq_file}"
+        )
+
+    print(
+        f"{disease:25s} | SHAP=FOUND | corrected DESeq2=FOUND"
+    )
+
+
+# ================================================================
+# PROCESS
+# ================================================================
+
+master_all = []
+master_sig = []
+
+for disease in DISEASES:
+
+    print("\n" + "=" * 100)
+    print(disease.upper())
+    print("=" * 100)
+
+    ddir = os.path.join(
+        SHAP_DIR,
+        disease
+    )
+
+    shap_file = [
+        f for f in os.listdir(ddir)
+        if "SHAP" in f.upper()
+        and "SUMMARY" in f.upper()
+        and f.lower().endswith(".csv")
+    ][0]
+
+    shap = pd.read_csv(
+        os.path.join(
+            ddir,
+            shap_file
+        )
+    )
+
+    # ------------------------------------------------------------
+    # IDENTIFY SHAP COLUMNS
+    # ------------------------------------------------------------
+
+    microbe_col = find_column(
+        shap,
+        ["microbe", "species", "taxon", "taxa"]
+    )
+
+    rank_col = find_column(
+        shap,
+        ["rank", "shap_rank"]
+    )
+
+    shap_value_col = find_column(
+        shap,
+        [
+            "mean_abs_shap",
+            "mean_abs_SHAP",
+            "mean absolute shap",
+            "mean_abs"
+        ]
+    )
+
+    if microbe_col is None:
+        raise ValueError(
+            f"{disease}: SHAP microbe column not found.\n"
+            f"Columns: {list(shap.columns)}"
+        )
+
+    if rank_col is None:
+        raise ValueError(
+            f"{disease}: SHAP rank column not found."
+        )
+
+    if shap_value_col is None:
+        raise ValueError(
+            f"{disease}: SHAP importance column not found."
+        )
+
+    # ------------------------------------------------------------
+    # LOCK TOP 30 SHAP FEATURES
+    # ------------------------------------------------------------
+
+    shap = shap[
+        [
+            microbe_col,
+            rank_col,
+            shap_value_col
+        ]
+    ].copy()
+
+    shap.columns = [
+        "microbe",
+        "SHAP_rank",
+        "Mean_abs_SHAP"
+    ]
+
+    shap["microbe"] = (
+        shap["microbe"]
+        .apply(normalize_taxon)
+    )
+
+    shap["SHAP_rank"] = pd.to_numeric(
+        shap["SHAP_rank"],
+        errors="coerce"
+    )
+
+    shap["Mean_abs_SHAP"] = pd.to_numeric(
+        shap["Mean_abs_SHAP"],
+        errors="coerce"
+    )
+
+    shap = (
+        shap
+        .sort_values("SHAP_rank")
+        .head(30)
+        .copy()
+    )
+
+    if len(shap) != 30:
+        raise ValueError(
+            f"{disease}: expected 30 SHAP features; "
+            f"found {len(shap)}."
+        )
+
+    # ------------------------------------------------------------
+    # READ CORRECTED DESeq2
+    # ------------------------------------------------------------
+
+    deseq = pd.read_csv(
+        os.path.join(
+            DESEQ_DIR,
+            f"{disease}_CORRECTED_full_DESeq2_results.csv"
+        )
+    )
+
+    taxon_col = find_column(
+        deseq,
+        [
+            "microbe",
+            "species",
+            "taxon",
+            "taxa",
+            "feature",
+            "name"
+        ]
+    )
+
+    lfc_col = find_column(
+        deseq,
+        [
+            "log2FoldChange",
+            "log2foldchange",
+            "lfc"
+        ]
+    )
+
+    padj_col = find_column(
+        deseq,
+        [
+            "padj",
+            "adjusted_pvalue",
+            "adjusted_p_value",
+            "fdr"
+        ]
+    )
+
+    if taxon_col is None:
+        raise ValueError(
+            f"{disease}: DESeq2 taxon column not found."
+        )
+
+    if lfc_col is None:
+        raise ValueError(
+            f"{disease}: DESeq2 log2FoldChange missing."
+        )
+
+    if padj_col is None:
+        raise ValueError(
+            f"{disease}: DESeq2 padj missing."
+        )
+
+    deseq = deseq[
+        [
+            taxon_col,
+            lfc_col,
+            padj_col
+        ]
+    ].copy()
+
+    deseq.columns = [
+        "DESeq2_microbe",
+        "DESeq2_log2FoldChange",
+        "DESeq2_padj"
+    ]
+
+    deseq["_match"] = (
+        deseq["DESeq2_microbe"]
+        .apply(normalize_taxon)
+    )
+
+    if deseq["_match"].duplicated().any():
+        raise ValueError(
+            f"{disease}: duplicate taxa in corrected DESeq2."
+        )
+
+    # ------------------------------------------------------------
+    # MERGE
+    # ------------------------------------------------------------
+
+    shap["_match"] = (
+        shap["microbe"]
+        .apply(normalize_taxon)
+    )
+
+    merged = pd.merge(
+        shap,
+        deseq[
+            [
+                "_match",
+                "DESeq2_microbe",
+                "DESeq2_log2FoldChange",
+                "DESeq2_padj"
+            ]
+        ],
+        on="_match",
+        how="left",
+        validate="one_to_one"
+    )
+
+    matched = (
+        merged["DESeq2_log2FoldChange"]
+        .notna()
+    )
+
+    if not matched.all():
+
+        unmatched = merged.loc[
+            ~matched,
+            "microbe"
+        ].tolist()
+
+        raise ValueError(
+            f"{disease}: SHAP taxa not found in corrected DESeq2:\n"
+            + "\n".join(unmatched)
+        )
+
+    # ------------------------------------------------------------
+    # SIGNIFICANCE
+    # ------------------------------------------------------------
+
+    merged["DESeq2_significant"] = (
+        merged["DESeq2_padj"] < PADJ_THRESHOLD
+    )
+
+    # ------------------------------------------------------------
+    # DIRECTIONS
+    # ------------------------------------------------------------
+
+    merged["DESeq2_direction"] = np.where(
+        merged["DESeq2_log2FoldChange"] > 0,
+        "Upregulated",
+        np.where(
+            merged["DESeq2_log2FoldChange"] < 0,
+            "Downregulated",
+            "Zero"
+        )
+    )
+
+    # SHAP direction is based on the sign of the SHAP contribution
+    # represented in the existing SHAP summary/integration workflow.
+    #
+    # Since the SHAP summary itself contains mean absolute SHAP,
+    # significance is determined from DESeq2 here. We do not invent
+    # a directional SHAP value from mean absolute SHAP.
+
+    # ------------------------------------------------------------
+    # SAVE FULL TOP-30 INTEGRATION
+    # ------------------------------------------------------------
+
+    merged.insert(
+        0,
+        "Disease",
+        disease
+    )
+
+    merged = merged.drop(
+        columns=["_match"]
+    )
+
+    full_file = os.path.join(
+        OUTDIR,
+        f"{disease}_CORRECTED_SHAP_DESEQ2_TOP30.csv"
+    )
+
+    merged.to_csv(
+        full_file,
+        index=False
+    )
+
+    # ------------------------------------------------------------
+    # SIGNIFICANT OVERLAP
+    # ------------------------------------------------------------
+
+    significant = merged[
+        merged["DESeq2_significant"]
+    ].copy()
+
+    sig_file = os.path.join(
+        OUTDIR,
+        f"{disease}_CORRECTED_SHAP_DESEQ2_SIGNIFICANT.csv"
+    )
+
+    significant.to_csv(
+        sig_file,
+        index=False
+    )
+
+    master_all.append(
+        merged
+    )
+
+    master_sig.append(
+        significant
+    )
+
+    # ------------------------------------------------------------
+    # REPORT
+    # ------------------------------------------------------------
+
+    print(
+        "SHAP top-30:",
+        len(merged)
+    )
+
+    print(
+        "Matched corrected DESeq2:",
+        int(matched.sum())
+    )
+
+    print(
+        "DESeq2-significant within SHAP:",
+        len(significant)
+    )
+
+    print(
+        "Upregulated:",
+        int(
+            (
+                significant["DESeq2_direction"]
+                == "Upregulated"
+            ).sum()
+        )
+    )
+
+    print(
+        "Downregulated:",
+        int(
+            (
+                significant["DESeq2_direction"]
+                == "Downregulated"
+            ).sum()
+        )
+    )
+
+
+# ================================================================
+# MASTER FILES
+# ================================================================
+
+all_df = pd.concat(
+    master_all,
+    ignore_index=True
+)
+
+sig_df = pd.concat(
+    master_sig,
+    ignore_index=True
+)
+
+all_file = os.path.join(
+    OUTDIR,
+    "ALL_6_DISEASES_CORRECTED_SHAP_DESEQ2_TOP30.csv"
+)
+
+sig_file = os.path.join(
+    OUTDIR,
+    "ALL_6_DISEASES_CORRECTED_SHAP_DESEQ2_SIGNIFICANT.csv"
+)
+
+all_df.to_csv(
+    all_file,
+    index=False
+)
+
+sig_df.to_csv(
+    sig_file,
+    index=False
+)
+
+
+# ================================================================
+# SUMMARY
+# ================================================================
+
+summary = (
+    sig_df
+    .groupby("Disease")
+    .agg(
+        SHAP_selected_features=("microbe", "size"),
+        DESeq2_significant=("DESeq2_microbe", "size"),
+        Upregulated=(
+            "DESeq2_direction",
+            lambda x: (x == "Upregulated").sum()
+        ),
+        Downregulated=(
+            "DESeq2_direction",
+            lambda x: (x == "Downregulated").sum()
+        )
+    )
+    .reset_index()
+)
+
+# Add diseases with zero significant overlap
+summary = pd.DataFrame({
+    "Disease": DISEASES
+}).merge(
+    summary,
+    on="Disease",
+    how="left"
+)
+
+summary["SHAP_selected_features"] = 30
+
+summary["DESeq2_significant"] = (
+    summary["DESeq2_significant"]
+    .fillna(0)
+    .astype(int)
+)
+
+summary["Upregulated"] = (
+    summary["Upregulated"]
+    .fillna(0)
+    .astype(int)
+)
+
+summary["Downregulated"] = (
+    summary["Downregulated"]
+    .fillna(0)
+    .astype(int)
+)
+
+summary_file = os.path.join(
+    OUTDIR,
+    "CORRECTED_SHAP_DESEQ2_SIGNIFICANT_SUMMARY.csv"
+)
+
+summary.to_csv(
+    summary_file,
+    index=False
+)
+
+
+# ================================================================
+# FINAL QC
+# ================================================================
+
+print("\n")
+print("=" * 100)
+print("CORRECTED SHAP + DESeq2 INTEGRATION COMPLETED")
+print("=" * 100)
+
+print(
+    "\nExpected total SHAP rows:",
+    6 * 30
+)
+
+print(
+    "Actual total SHAP rows:",
+    len(all_df)
+)
+
+if len(all_df) != 180:
+    raise ValueError(
+        "ERROR: expected exactly 180 SHAP rows."
+    )
+
+print("\nSUMMARY:")
+print(
+    summary.to_string(index=False)
+)
+
+print("\nSaved to:")
+print(OUTDIR)
+
+
+# ================================================================
+# AUTOMATIC ZIP + DOWNLOAD
+# ================================================================
+
+zip_path = shutil.make_archive(
+    "/content/FINAL_CORRECTED_SHAP_DESEQ2_INTEGRATION",
+    "zip",
+    OUTDIR
+)
+
+print("\nZIP created:")
+print(zip_path)
+
+files.download(zip_path)
+
+print("\nNO ML RERUN.")
+print("NO SHAP RERUN.")
+print("NO DESeq2 RERUN.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
