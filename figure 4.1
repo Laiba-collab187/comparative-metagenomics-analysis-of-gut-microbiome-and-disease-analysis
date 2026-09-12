@@ -1,78 +1,804 @@
-# ============================================================
-# FIGURE 2
-# SHAP-LFC RELATIONSHIP AND SHARED MICROBIAL SPECIES
-# ============================================================
+# ======================================================================
+# FIGURE 4.1 — FINAL SHAP + FULL NEW DESEQ2 LFC INTEGRATION
+#
+# SELECTED PAIR:
+#       COVID19 × Dwarfism
+#
+# IMPORTANT:
+#   The pair was selected ONLY from the NEW results.
+#
+#   We now use:
+#       NEW SHAP values
+#       +
+#       NEW FULL DESeq2 LFC
+#
+#   NOT the Top-100 files for the LFC matching.
+#
+# PURPOSE:
+#   Recover LFC values for ALL SHAP features before Figure 4.1
+#   generation.
+#
+# NO SHAP RERUN
+# NO ML RERUN
+# NO OLD THESIS RESULTS
+# ======================================================================
 
-import numpy as np
+from pathlib import Path
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+import re
 
+BASE = Path("/content")
 
-# ============================================================
-# INPUT FILES
-# ============================================================
-
-FIB_SOURCE = (
-    "CORRECTED_Fibromyalgia_Figure2_SHAP_LFC_SOURCE.csv"
+SHAP_ROOT = (
+    BASE /
+    "FINAL_RF_SHAP_QUALIFIED_DISEASES"
 )
 
-FATIGUE_SOURCE = (
-    "CORRECTED_Fatigue_Figure2_SHAP_LFC_SOURCE.csv"
+OUT_DIR = (
+    BASE /
+    "FINAL_FIGURE_4_1_NEW_SHAP_PAIR_AUDIT"
 )
 
-SHARED_CASE_SOURCE = (
-    "CORRECTED_Figure_2C_Shared_Case_41_SOURCE.csv"
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
 )
 
-SHARED_CONTROL_SOURCE = (
-    "CORRECTED_Figure_2C_Shared_Control_39_SOURCE.csv"
-)
-
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-fib = pd.read_csv(
-    FIB_SOURCE
-)
-
-fatigue = pd.read_csv(
-    FATIGUE_SOURCE
-)
-
-shared_case = pd.read_csv(
-    SHARED_CASE_SOURCE
-)
-
-shared_control = pd.read_csv(
-    SHARED_CONTROL_SOURCE
-)
-
-
-# ============================================================
-# VALIDATE SOURCE FILES
-# ============================================================
-
-required_columns = [
-    "microbe",
-    "Case_SHAP_Sum",
-    "Control_SHAP_Sum",
-    "log2FoldChange",
-    "case_rank",
-    "control_rank"
+DISEASES = [
+    "COVID19",
+    "Dwarfism"
 ]
 
 
-for disease, df in [
-    ("Fibromyalgia", fib),
-    ("Fatigue", fatigue)
-]:
+# ======================================================================
+# 1. LOAD ACTUAL NEW SHAP TABLES
+# ======================================================================
+
+print("=" * 100)
+print("FIGURE 4.1 — COVID19 × DWARFISM FULL LFC INTEGRATION")
+print("=" * 100)
+
+shap_tables = {}
+
+for disease in DISEASES:
+
+    shap_file = (
+        SHAP_ROOT /
+        disease /
+        f"{disease}_RF_SHAP_VALUES.csv"
+    )
+
+    if not shap_file.exists():
+
+        raise FileNotFoundError(
+            f"\nSHAP file not found:\n{shap_file}"
+        )
+
+    df = pd.read_csv(
+        shap_file
+    )
+
+    metadata = {
+        "name",
+        "label",
+        "condition"
+    }
+
+    microbial_cols = [
+        c for c in df.columns
+        if c not in metadata
+    ]
+
+    if len(microbial_cols) != 30:
+
+        raise ValueError(
+            f"{disease}: expected 30 SHAP microbial features, "
+            f"found {len(microbial_cols)}"
+        )
+
+    # --------------------------------------------------------------
+    # Signed SHAP sums
+    # --------------------------------------------------------------
+
+    case_df = df[
+        df["label"] == 1
+    ]
+
+    control_df = df[
+        df["label"] == 0
+    ]
+
+    case_sum = (
+        case_df[microbial_cols]
+        .sum(axis=0)
+    )
+
+    control_sum = (
+        control_df[microbial_cols]
+        .sum(axis=0)
+    )
+
+    result = pd.DataFrame({
+        "microbe": microbial_cols,
+        "Case_SHAP_Sum": [
+            case_sum[x]
+            for x in microbial_cols
+        ],
+        "Control_SHAP_Sum": [
+            control_sum[x]
+            for x in microbial_cols
+        ]
+    })
+
+    result["Disease"] = disease
+
+    shap_tables[disease] = result
+
+    print(
+        f"\n{disease}:"
+    )
+
+    print(
+        f"  SHAP samples: {len(df)}"
+    )
+
+    print(
+        f"  Case samples: {len(case_df)}"
+    )
+
+    print(
+        f"  Healthy samples: {len(control_df)}"
+    )
+
+    print(
+        f"  SHAP microbial features: {len(microbial_cols)}"
+    )
+
+
+# ======================================================================
+# 2. SEARCH /content FOR FULL DESEQ2 FILES
+#
+# We deliberately do NOT assume a filename.
+# ======================================================================
+
+print("\n" + "=" * 100)
+print("SEARCHING FOR NEW FULL DESEQ2 RESULTS")
+print("=" * 100)
+
+all_csvs = list(
+    BASE.rglob("*.csv")
+)
+
+print(
+    f"\nCSV files examined: {len(all_csvs)}"
+)
+
+
+# ======================================================================
+# 3. NORMALIZE COLUMN NAMES
+# ======================================================================
+
+def norm(x):
+
+    return (
+        str(x)
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+    )
+
+
+# ======================================================================
+# 4. IDENTIFY CANDIDATE FULL DESEQ2 FILES
+# ======================================================================
+
+candidate_files = {
+    disease: []
+    for disease in DISEASES
+}
+
+
+for path in all_csvs:
+
+    name = path.name.lower()
+    path_text = str(path).lower()
+
+    # Must look like a DESeq2 result
+    looks_deseq = (
+        "deseq" in name
+        or
+        "deseq2" in name
+    )
+
+    if not looks_deseq:
+        continue
+
+    # Don't accidentally use the corrected Top100 files
+    if "top100" in path_text:
+        continue
+
+    try:
+
+        df = pd.read_csv(
+            path,
+            nrows=5
+        )
+
+    except Exception:
+
+        continue
+
+    cols = {
+        norm(c)
+        for c in df.columns
+    }
+
+    # Required DESeq2 LFC field
+    if "log2foldchange" not in cols:
+        continue
+
+    # Identify disease
+    for disease in DISEASES:
+
+        disease_variants = {
+            disease.lower(),
+            disease.lower().replace("_", ""),
+            disease.lower().replace("_", " ")
+        }
+
+        if any(
+            v in path_text
+            for v in disease_variants
+        ):
+
+            candidate_files[disease].append(
+                path
+            )
+
+
+# ======================================================================
+# 5. DISPLAY CANDIDATES
+# ======================================================================
+
+for disease in DISEASES:
+
+    print(
+        f"\n{disease} candidate DESeq2 files:"
+    )
+
+    if len(candidate_files[disease]) == 0:
+
+        print(
+            "   NONE FOUND"
+        )
+
+    else:
+
+        for p in candidate_files[disease]:
+
+            print(
+                "   ",
+                p
+            )
+
+
+# ======================================================================
+# 6. AUTOMATICALLY SELECT THE MOST LIKELY FULL DESEQ2 FILE
+# ======================================================================
+
+def score_deseq_file(path, disease):
+
+    text = str(path).lower()
+
+    score = 0
+
+    # Disease name
+    if disease.lower() in text:
+        score += 20
+
+    # Explicit full-results naming
+    if "full" in text:
+        score += 20
+
+    if "results" in text:
+        score += 10
+
+    if "deseq2" in text:
+        score += 10
+
+    # Penalize Top100 / directional subsets
+    if "top100" in text:
+        score -= 100
+
+    if "upregulated" in text:
+        score -= 30
+
+    if "downregulated" in text:
+        score -= 30
+
+    if "significant" in text:
+        score -= 20
+
+    return score
+
+
+selected_deseq = {}
+
+for disease in DISEASES:
+
+    candidates = candidate_files[disease]
+
+    if len(candidates) == 0:
+
+        raise FileNotFoundError(
+            f"\nNo full DESeq2 candidate found for {disease}."
+        )
+
+    ranked = sorted(
+        candidates,
+        key=lambda p: score_deseq_file(
+            p,
+            disease
+        ),
+        reverse=True
+    )
+
+    selected_deseq[disease] = ranked[0]
+
+    print(
+        f"\nSELECTED {disease} DESeq2:"
+    )
+
+    print(
+        ranked[0]
+    )
+
+
+# ======================================================================
+# 7. LOAD SELECTED FULL DESEQ2 RESULTS
+# ======================================================================
+
+deseq_tables = {}
+
+for disease in DISEASES:
+
+    path = selected_deseq[disease]
+
+    df = pd.read_csv(
+        path
+    )
+
+    # Locate columns
+    col_map = {
+        norm(c): c
+        for c in df.columns
+    }
+
+    if "log2foldchange" not in col_map:
+
+        raise ValueError(
+            f"{path} has no log2FoldChange column."
+        )
+
+    lfc_col = col_map[
+        "log2foldchange"
+    ]
+
+    # Find microbe/species column
+    microbe_col = None
+
+    for candidate in [
+        "microbe",
+        "species",
+        "taxon",
+        "feature",
+        "name"
+    ]:
+
+        if candidate in col_map:
+
+            microbe_col = col_map[
+                candidate
+            ]
+
+            break
+
+    if microbe_col is None:
+
+        # Try common first-column structures
+        for c in df.columns:
+
+            clean = norm(c)
+
+            if (
+                "microbe" in clean
+                or
+                "species" in clean
+                or
+                "taxon" in clean
+                or
+                "feature" in clean
+            ):
+
+                microbe_col = c
+                break
+
+    if microbe_col is None:
+
+        raise ValueError(
+            f"\nCould not identify microbial/species column "
+            f"in:\n{path}\n"
+            f"Columns:\n{list(df.columns)}"
+        )
+
+    lfc = df[
+        [
+            microbe_col,
+            lfc_col
+        ]
+    ].copy()
+
+    lfc.columns = [
+        "microbe",
+        "log2FoldChange"
+    ]
+
+    lfc["microbe"] = (
+        lfc["microbe"]
+        .astype(str)
+        .str.strip()
+    )
+
+    lfc["log2FoldChange"] = pd.to_numeric(
+        lfc["log2FoldChange"],
+        errors="coerce"
+    )
+
+    # Remove duplicate microbial names
+    lfc = (
+        lfc
+        .drop_duplicates(
+            subset="microbe",
+            keep="first"
+        )
+    )
+
+    deseq_tables[disease] = lfc
+
+    print(
+        f"\n{disease} DESeq2:"
+    )
+
+    print(
+        f"  File: {path}"
+    )
+
+    print(
+        f"  Rows: {len(df)}"
+    )
+
+    print(
+        f"  Unique microbes: {len(lfc)}"
+    )
+
+    print(
+        f"  LFC column: {lfc_col}"
+    )
+
+    print(
+        f"  Microbe column: {microbe_col}"
+    )
+
+
+# ======================================================================
+# 8. MERGE FULL DESEQ2 LFC WITH SHAP
+# ======================================================================
+
+integrated = {}
+
+for disease in DISEASES:
+
+    merged = shap_tables[disease].merge(
+        deseq_tables[disease],
+        on="microbe",
+        how="left"
+    )
+
+    integrated[disease] = merged
+
+    matched = (
+        merged["log2FoldChange"]
+        .notna()
+        .sum()
+    )
+
+    total = len(merged)
+
+    print("\n" + "-" * 80)
+
+    print(
+        f"{disease}:"
+    )
+
+    print(
+        f"  SHAP features: {total}"
+    )
+
+    print(
+        f"  Full-DESeq2 LFC matched: {matched}"
+    )
+
+    print(
+        f"  Missing LFC: {total - matched}"
+    )
+
+    # --------------------------------------------------------------
+    # Save
+    # --------------------------------------------------------------
+
+    merged.to_csv(
+        OUT_DIR /
+        f"{disease}_SHAP_FULL_DESEQ2_LFC.csv",
+        index=False
+    )
+
+
+# ======================================================================
+# 9. STRICT QC
+# ======================================================================
+
+print("\n" + "=" * 100)
+print("STRICT SHAP–LFC QC")
+print("=" * 100)
+
+for disease in DISEASES:
+
+    df = integrated[disease]
+
+    missing = df[
+        df["log2FoldChange"].isna()
+    ]
+
+    if len(missing) > 0:
+
+        print(
+            f"\nWARNING — {disease}: "
+            f"{len(missing)} SHAP features still lack LFC."
+        )
+
+        display(
+            missing[
+                [
+                    "microbe",
+                    "Case_SHAP_Sum",
+                    "Control_SHAP_Sum"
+                ]
+            ]
+        )
+
+    else:
+
+        print(
+            f"\nPASS — {disease}: "
+            f"ALL {len(df)} SHAP FEATURES HAVE NEW FULL-DESEQ2 LFC"
+        )
+
+
+# ======================================================================
+# 10. FINAL DATASET FOR FIGURE 4.1
+# ======================================================================
+
+covid19_fig41 = integrated[
+    "COVID19"
+].copy()
+
+dwarfism_fig41 = integrated[
+    "Dwarfism"
+].copy()
+
+
+# Require complete SHAP + LFC information
+covid19_complete = covid19_fig41[
+    covid19_fig41["log2FoldChange"].notna()
+].copy()
+
+dwarfism_complete = dwarfism_fig41[
+    dwarfism_fig41["log2FoldChange"].notna()
+].copy()
+
+
+# ======================================================================
+# 11. SAVE FINAL FIGURE INPUT DATA
+# ======================================================================
+
+covid19_complete.to_csv(
+    OUT_DIR /
+    "FIGURE_4_1_COVID19_FINAL_INPUT.csv",
+    index=False
+)
+
+dwarfism_complete.to_csv(
+    OUT_DIR /
+    "FIGURE_4_1_DWARFISM_FINAL_INPUT.csv",
+    index=False
+)
+
+
+# ======================================================================
+# 12. FINAL REPORT
+# ======================================================================
+
+print("\n" + "=" * 100)
+print("FIGURE 4.1 FINAL INPUT QC")
+print("=" * 100)
+
+print(
+    "\nSelected disease pair:"
+)
+
+print(
+    "COVID19 × Dwarfism"
+)
+
+print(
+    "\nCOVID19:"
+)
+
+print(
+    f"  Complete SHAP-LFC points = "
+    f"{len(covid19_complete)} / "
+    f"{len(covid19_fig41)}"
+)
+
+print(
+    "\nDwarfism:"
+)
+
+print(
+    f"  Complete SHAP-LFC points = "
+    f"{len(dwarfism_complete)} / "
+    f"{len(dwarfism_fig41)}"
+)
+
+
+if (
+    len(covid19_complete)
+    == len(covid19_fig41)
+    and
+    len(dwarfism_complete)
+    == len(dwarfism_fig41)
+):
+
+    print(
+        "\n=============================================================="
+    )
+
+    print(
+        "PASS — ALL SHAP FEATURES HAVE FULL NEW DESeq2 LFC"
+    )
+
+    print(
+        "=============================================================="
+    )
+
+    print(
+        "\nWe can now safely generate Figure 4.1."
+    )
+
+else:
+
+    print(
+        "\n=============================================================="
+    )
+
+    print(
+        "STOP — SOME SHAP FEATURES STILL HAVE NO LFC"
+    )
+
+    print(
+        "=============================================================="
+    )
+
+    print(
+        "\nDo NOT generate Figure 4.1 yet."
+    )
+
+print(
+    "\nOutput directory:"
+)
+
+print(
+    OUT_DIR
+)
+
+
+
+
+
+
+
+
+
+
+
+
+# ======================================================================
+# FIGURE 4.1 — FINAL REFERENCE-ALIGNED DATA VALIDATION
+#
+# SELECTED NEW PAIR:
+#     COVID19 × Dwarfism
+#
+# REFERENCE FIGURE 2 LOGIC:
+#     SHAP value vs within-disease LFC
+#     Case-associated / control-associated ranking from NEW Top-100
+#     Neutral microbes remain neutral
+#
+# IMPORTANT:
+#     ONLY NEW RESULTS
+#     NO OLD THESIS RESULTS
+#     NO SHAP RERUN
+#     NO ML RERUN
+#     NO FIGURE GENERATION YET
+# ======================================================================
+
+from pathlib import Path
+import pandas as pd
+import numpy as np
+
+BASE = Path("/content")
+
+PAIR_A = "COVID19"
+PAIR_B = "Dwarfism"
+
+SHAP_AUDIT = (
+    BASE /
+    "FINAL_FIGURE_4_1_NEW_SHAP_PAIR_AUDIT"
+)
+
+TOP100_ROOT = (
+    BASE /
+    "CORRECTED_DESEQ2_TOP100_REFERENCE_ALIGNED"
+)
+
+print("=" * 100)
+print("FIGURE 4.1 — FINAL REFERENCE-ALIGNED DATA VALIDATION")
+print("=" * 100)
+
+print("\nSelected pair:")
+print(f"    {PAIR_A} × {PAIR_B}")
+
+
+# ======================================================================
+# 1. LOAD THE FINAL SHAP + FULL-DESEQ2 TABLES
+# ======================================================================
+
+def load_integrated(disease):
+
+    path = (
+        SHAP_AUDIT /
+        f"{disease}_SHAP_FULL_DESEQ2_LFC.csv"
+    )
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"\nIntegrated SHAP/LFC file not found:\n{path}"
+        )
+
+    df = pd.read_csv(path)
+
+    required = [
+        "microbe",
+        "Case_SHAP_Sum",
+        "Control_SHAP_Sum",
+        "log2FoldChange"
+    ]
 
     missing = [
-        column
-        for column in required_columns
-        if column not in df.columns
+        c for c in required
+        if c not in df.columns
     ]
 
     if missing:
@@ -81,400 +807,1614 @@ for disease, df in [
             f"{disease}: missing columns {missing}"
         )
 
-
-print(
-    "Fibromyalgia:",
-    fib.shape
-)
-
-print(
-    "Fatigue:",
-    fatigue.shape
-)
-
-print(
-    "Shared case microbes:",
-    len(shared_case)
-)
-
-print(
-    "Shared control microbes:",
-    len(shared_control)
-)
+    return df
 
 
-# ============================================================
-# FIGURE 2A AND 2B FUNCTION
-# ============================================================
+covid = load_integrated(PAIR_A)
+dwarf = load_integrated(PAIR_B)
 
-def plot_shap_lfc(
-    df,
-    disease,
-    panel_letter,
-    output_file
+
+# ======================================================================
+# 2. LOAD NEW TOP-100 CASE / CONTROL SIGNATURES
+# ======================================================================
+
+def load_top100(disease, association):
+
+    if association == "case":
+
+        path = (
+            TOP100_ROOT /
+            f"{disease}_TOP100_DISEASE_ENRICHED_CORRECTED.csv"
+        )
+
+    else:
+
+        path = (
+            TOP100_ROOT /
+            f"{disease}_TOP100_HEALTHY_ENRICHED_CORRECTED.csv"
+        )
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"\nNEW Top-100 file not found:\n{path}"
+        )
+
+    df = pd.read_csv(path)
+
+    required = [
+        "Rank",
+        "microbe"
+    ]
+
+    missing = [
+        c for c in required
+        if c not in df.columns
+    ]
+
+    if missing:
+
+        raise ValueError(
+            f"{path}: missing {missing}"
+        )
+
+    if len(df) != 100:
+
+        raise ValueError(
+            f"{path}: expected 100 rows, found {len(df)}"
+        )
+
+    return df[
+        [
+            "Rank",
+            "microbe"
+        ]
+    ].copy()
+
+
+def add_new_ranks(
+    shap_lfc,
+    disease
 ):
 
-    fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(20, 8),
-        sharey=True
+    case = load_top100(
+        disease,
+        "case"
     )
 
-
-    # --------------------------------------------------------
-    # CASE PANEL
-    # --------------------------------------------------------
-
-    case_data = df[
-        df["case_rank"].notna()
-    ].copy()
-
-    scatter_case = axes[0].scatter(
-        case_data["Case_SHAP_Sum"],
-        case_data["log2FoldChange"],
-        c=case_data["case_rank"],
-        cmap="Blues_r",
-        s=55
+    control = load_top100(
+        disease,
+        "control"
     )
 
-    axes[0].axhline(
-        0,
-        linestyle="--",
-        linewidth=1
+    # --------------------------------------------------------------
+    # Rename rank columns
+    # --------------------------------------------------------------
+
+    case = case.rename(
+        columns={
+            "Rank": "Case_Rank"
+        }
     )
 
-    axes[0].axvline(
-        0,
-        linestyle="--",
-        linewidth=1
+    control = control.rename(
+        columns={
+            "Rank": "Control_Rank"
+        }
     )
 
-    axes[0].set_title(
-        "Cases",
-        fontsize=20
+    # --------------------------------------------------------------
+    # Merge BOTH NEW rankings onto the SHAP features
+    # --------------------------------------------------------------
+
+    out = shap_lfc.merge(
+        case,
+        on="microbe",
+        how="left"
     )
 
-    axes[0].set_xlabel(
-        "Summed Shapley value",
-        fontsize=16
+    out = out.merge(
+        control,
+        on="microbe",
+        how="left"
     )
 
-    axes[0].set_ylabel(
-        r"$\log_2$ fold change",
-        fontsize=16
+    return out
+
+
+covid = add_new_ranks(
+    covid,
+    PAIR_A
+)
+
+dwarf = add_new_ranks(
+    dwarf,
+    PAIR_B
+)
+
+
+# ======================================================================
+# 3. ASSIGN REFERENCE-STYLE ASSOCIATION
+#
+# A microbe can be:
+#   Case-associated
+#   Control-associated
+#   Neutral
+#
+# We do NOT infer this from SHAP sign.
+# We use the NEW differential-abundance ranking.
+# ======================================================================
+
+def assign_association(df):
+
+    def classify(row):
+
+        case_rank = row["Case_Rank"]
+        control_rank = row["Control_Rank"]
+
+        if pd.notna(case_rank):
+
+            return "Case-associated"
+
+        if pd.notna(control_rank):
+
+            return "Control-associated"
+
+        return "Neutral"
+
+    df["Association"] = df.apply(
+        classify,
+        axis=1
     )
 
-
-    # Label top-ranked case microbes
-
-    case_labels = (
-        case_data
-        .sort_values(
-            "case_rank"
-        )
-        .head(10)
-    )
-
-    for _, row in case_labels.iterrows():
-
-        axes[0].annotate(
-            row["microbe"],
-            (
-                row["Case_SHAP_Sum"],
-                row["log2FoldChange"]
-            ),
-            xytext=(5, 3),
-            textcoords="offset points",
-            fontsize=9
-        )
+    return df
 
 
-    case_colorbar = fig.colorbar(
-        scatter_case,
-        ax=axes[0]
-    )
+covid = assign_association(
+    covid
+)
 
-    case_colorbar.set_label(
-        "Case-associated rank",
-        fontsize=14
-    )
+dwarf = assign_association(
+    dwarf
+)
 
 
-    # --------------------------------------------------------
-    # CONTROL PANEL
-    # --------------------------------------------------------
+# ======================================================================
+# 4. PRINT QC
+# ======================================================================
 
-    control_data = df[
-        df["control_rank"].notna()
-    ].copy()
+print("\n" + "=" * 100)
+print("COVID19 — FIGURE 4.1 DATA QC")
+print("=" * 100)
 
-    scatter_control = axes[1].scatter(
-        control_data["Control_SHAP_Sum"],
-        control_data["log2FoldChange"],
-        c=control_data["control_rank"],
-        cmap="Reds_r",
-        s=55
-    )
-
-    axes[1].axhline(
-        0,
-        linestyle="--",
-        linewidth=1
-    )
-
-    axes[1].axvline(
-        0,
-        linestyle="--",
-        linewidth=1
-    )
-
-    axes[1].set_title(
-        "Controls",
-        fontsize=20
-    )
-
-    axes[1].set_xlabel(
-        "Summed Shapley value",
-        fontsize=16
-    )
-
-
-    # Label top-ranked control microbes
-
-    control_labels = (
-        control_data
-        .sort_values(
-            "control_rank"
-        )
-        .head(10)
-    )
-
-    for _, row in control_labels.iterrows():
-
-        axes[1].annotate(
-            row["microbe"],
-            (
-                row["Control_SHAP_Sum"],
-                row["log2FoldChange"]
-            ),
-            xytext=(5, 3),
-            textcoords="offset points",
-            fontsize=9
-        )
-
-
-    control_colorbar = fig.colorbar(
-        scatter_control,
-        ax=axes[1]
-    )
-
-    control_colorbar.set_label(
-        "Control-associated rank",
-        fontsize=14
-    )
-
-
-    # --------------------------------------------------------
-    # PANEL TITLE
-    # --------------------------------------------------------
-
-    fig.text(
-        0.01,
-        0.98,
-        f"{panel_letter}  {disease}",
-        fontsize=24,
-        fontweight="bold",
-        va="top"
-    )
-
-    plt.tight_layout(
-        rect=[
-            0,
-            0,
-            1,
-            0.95
+print(
+    covid[
+        [
+            "microbe",
+            "Case_SHAP_Sum",
+            "Control_SHAP_Sum",
+            "log2FoldChange",
+            "Case_Rank",
+            "Control_Rank",
+            "Association"
         ]
+    ].to_string(index=False)
+)
+
+
+print("\n" + "=" * 100)
+print("DWARFISM — FIGURE 4.1 DATA QC")
+print("=" * 100)
+
+print(
+    dwarf[
+        [
+            "microbe",
+            "Case_SHAP_Sum",
+            "Control_SHAP_Sum",
+            "log2FoldChange",
+            "Case_Rank",
+            "Control_Rank",
+            "Association"
+        ]
+    ].to_string(index=False)
+)
+
+
+# ======================================================================
+# 5. COUNT ASSOCIATIONS
+# ======================================================================
+
+print("\n" + "=" * 100)
+print("ASSOCIATION COUNTS")
+print("=" * 100)
+
+for disease, df in [
+    (PAIR_A, covid),
+    (PAIR_B, dwarf)
+]:
+
+    print(
+        f"\n{disease}"
     )
 
-    plt.savefig(
-        output_file,
-        dpi=300,
+    print(
+        df["Association"]
+        .value_counts()
+    )
+
+
+# ======================================================================
+# 6. CHECK LFC COMPLETENESS
+# ======================================================================
+
+for disease, df in [
+    (PAIR_A, covid),
+    (PAIR_B, dwarf)
+]:
+
+    missing_lfc = (
+        df["log2FoldChange"]
+        .isna()
+        .sum()
+    )
+
+    if missing_lfc != 0:
+
+        raise ValueError(
+            f"{disease}: {missing_lfc} SHAP features "
+            f"still lack LFC."
+        )
+
+
+print(
+    "\nPASS — all 60 SHAP points have NEW full-DESeq2 LFC."
+)
+
+
+# ======================================================================
+# 7. VERIFY THAT TOP-100 RANKS ARE ACTUALLY NEW
+# ======================================================================
+
+for disease, df in [
+    (PAIR_A, covid),
+    (PAIR_B, dwarf)
+]:
+
+    invalid_case = df[
+        df["Case_Rank"].notna()
+        &
+        (
+            (df["Case_Rank"] < 1)
+            |
+            (df["Case_Rank"] > 100)
+        )
+    ]
+
+    invalid_control = df[
+        df["Control_Rank"].notna()
+        &
+        (
+            (df["Control_Rank"] < 1)
+            |
+            (df["Control_Rank"] > 100)
+        )
+    ]
+
+    if len(invalid_case) > 0:
+
+        raise ValueError(
+            f"{disease}: invalid case ranks detected."
+        )
+
+    if len(invalid_control) > 0:
+
+        raise ValueError(
+            f"{disease}: invalid control ranks detected."
+        )
+
+
+print(
+    "PASS — all Top-100 ranks are within 1–100."
+)
+
+
+# ======================================================================
+# 8. SAVE FINAL INPUT TABLES
+# ======================================================================
+
+covid_out = (
+    SHAP_AUDIT /
+    "FIGURE_4_1_COVID19_FINAL_REFERENCE_ALIGNED_DATA.csv"
+)
+
+dwarf_out = (
+    SHAP_AUDIT /
+    "FIGURE_4_1_DWARFISM_FINAL_REFERENCE_ALIGNED_DATA.csv"
+)
+
+covid.to_csv(
+    covid_out,
+    index=False
+)
+
+dwarf.to_csv(
+    dwarf_out,
+    index=False
+)
+
+
+# ======================================================================
+# 9. FINAL SUMMARY
+# ======================================================================
+
+print("\n" + "=" * 100)
+print("FIGURE 4.1 INPUT VALIDATION COMPLETE")
+print("=" * 100)
+
+print(
+    "\nDisease pair:"
+)
+
+print(
+    "COVID19 × Dwarfism"
+)
+
+print(
+    "\nData sources:"
+)
+
+print(
+    "✓ NEW RF SHAP values"
+)
+
+print(
+    "✓ NEW full DESeq2 LFC"
+)
+
+print(
+    "✓ NEW Top-100 case-associated rankings"
+)
+
+print(
+    "✓ NEW Top-100 control-associated rankings"
+)
+
+print(
+    "\nOld thesis results used: NO"
+)
+
+print(
+    "SHAP rerun: NO"
+)
+
+print(
+    "ML rerun: NO"
+)
+
+print(
+    "DESeq2 rerun: NO"
+)
+
+print(
+    "\nSaved:"
+)
+
+print(
+    covid_out
+)
+
+print(
+    dwarf_out
+)
+
+print(
+    "\nNEXT STEP:"
+)
+
+print(
+    "If the association counts and tables look correct,"
+)
+
+print(
+    "we can generate the six thesis-separated SVG components"
+)
+
+print(
+    "for Figure 4.1 using the reference Figure 2 visualization."
+)
+
+
+
+
+
+
+
+
+
+
+
+
+# ======================================================================
+# FINAL FIGURE 4.1 — CORRECTED READY-TO-USE VERSION
+#
+# Selected NEW pair:
+#     COVID19 × Dwarfism
+#
+# Uses ONLY:
+#     NEW SHAP
+#     NEW full DESeq2 LFC
+#     NEW Top-100 rankings
+#
+# Outputs:
+#     4.1a COVID19 case
+#     4.1a COVID19 control
+#     4.1b Dwarfism case
+#     4.1b Dwarfism control
+#     4.1c shared case
+#     4.1c shared control
+#
+# ONE GRAPH = ONE SVG
+# ======================================================================
+
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import zipfile
+
+# ======================================================================
+# PATHS
+# ======================================================================
+
+BASE = Path("/content")
+
+INPUT_DIR = (
+    BASE /
+    "FINAL_FIGURE_4_1_NEW_SHAP_PAIR_AUDIT"
+)
+
+TOP100_DIR = (
+    BASE /
+    "CORRECTED_DESEQ2_TOP100_REFERENCE_ALIGNED"
+)
+
+OUT_DIR = (
+    BASE /
+    "FINAL_THESIS_FIGURE_4_1_SVG"
+)
+
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+DISEASE_A = "COVID19"
+DISEASE_B = "Dwarfism"
+
+
+# ======================================================================
+# FIND VALIDATED FILE ROBUSTLY
+#
+# This avoids the previous capitalization/path mistake.
+# ======================================================================
+
+def find_validated_file(disease):
+
+    disease_upper = disease.upper()
+
+    candidates = []
+
+    for p in INPUT_DIR.glob("*.csv"):
+
+        name_upper = p.name.upper()
+
+        if (
+            f"FIGURE_4_1_{disease_upper}_FINAL_REFERENCE_ALIGNED_DATA.CSV"
+            == name_upper
+        ):
+            candidates.append(p)
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # More flexible fallback
+    for p in INPUT_DIR.glob("*.csv"):
+
+        name_upper = p.name.upper()
+
+        if (
+            "FIGURE_4_1" in name_upper
+            and disease_upper in name_upper
+            and "FINAL_REFERENCE_ALIGNED_DATA" in name_upper
+        ):
+            return p
+
+    raise FileNotFoundError(
+        f"\nCould not find validated Figure 4.1 file for {disease}.\n"
+        f"\nFiles currently present in:\n{INPUT_DIR}\n\n"
+        + "\n".join(
+            str(x.name)
+            for x in INPUT_DIR.glob("*")
+        )
+    )
+
+
+# ======================================================================
+# LOAD VALIDATED DATA
+# ======================================================================
+
+COVID_FILE = find_validated_file(
+    DISEASE_A
+)
+
+DWARF_FILE = find_validated_file(
+    DISEASE_B
+)
+
+print("=" * 100)
+print("VALIDATED FIGURE 4.1 INPUT FILES")
+print("=" * 100)
+
+print(
+    "\nCOVID19:"
+)
+
+print(
+    COVID_FILE
+)
+
+print(
+    "\nDwarfism:"
+)
+
+print(
+    DWARF_FILE
+)
+
+
+covid = pd.read_csv(
+    COVID_FILE
+)
+
+dwarf = pd.read_csv(
+    DWARF_FILE
+)
+
+
+# ======================================================================
+# REQUIRED COLUMNS
+# ======================================================================
+
+required_columns = [
+    "microbe",
+    "Case_SHAP_Sum",
+    "Control_SHAP_Sum",
+    "log2FoldChange",
+    "Case_Rank",
+    "Control_Rank",
+    "Association"
+]
+
+
+for disease, df in [
+    ("COVID19", covid),
+    ("Dwarfism", dwarf)
+]:
+
+    missing = [
+        c for c in required_columns
+        if c not in df.columns
+    ]
+
+    if missing:
+
+        raise ValueError(
+            f"{disease}: missing columns:\n{missing}"
+        )
+
+    if len(df) != 30:
+
+        raise ValueError(
+            f"{disease}: expected 30 SHAP features, "
+            f"found {len(df)}"
+        )
+
+    if df["log2FoldChange"].isna().any():
+
+        raise ValueError(
+            f"{disease}: missing NEW DESeq2 LFC values."
+        )
+
+
+print(
+    "\nPASS — COVID19 = 30 complete SHAP/LFC features"
+)
+
+print(
+    "PASS — Dwarfism = 30 complete SHAP/LFC features"
+)
+
+
+# ======================================================================
+# TOP-100 LOADER
+# ======================================================================
+
+def load_top100(
+    disease,
+    group
+):
+
+    if group == "case":
+
+        filename = (
+            f"{disease}_TOP100_DISEASE_ENRICHED_CORRECTED.csv"
+        )
+
+    else:
+
+        filename = (
+            f"{disease}_TOP100_HEALTHY_ENRICHED_CORRECTED.csv"
+        )
+
+    path = TOP100_DIR / filename
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"\nTop-100 file missing:\n{path}"
+        )
+
+    df = pd.read_csv(
+        path
+    )
+
+    if len(df) != 100:
+
+        raise ValueError(
+            f"{path}: expected 100 rows, "
+            f"found {len(df)}"
+        )
+
+    return df[
+        ["Rank", "microbe"]
+    ].copy()
+
+
+# ======================================================================
+# LOAD TOP-100
+# ======================================================================
+
+covid_case = load_top100(
+    DISEASE_A,
+    "case"
+)
+
+covid_control = load_top100(
+    DISEASE_A,
+    "control"
+)
+
+dwarf_case = load_top100(
+    DISEASE_B,
+    "case"
+)
+
+dwarf_control = load_top100(
+    DISEASE_B,
+    "control"
+)
+
+
+# ======================================================================
+# OVERLAP QC
+# ======================================================================
+
+case_overlap = (
+    set(covid_case["microbe"])
+    &
+    set(dwarf_case["microbe"])
+)
+
+control_overlap = (
+    set(covid_control["microbe"])
+    &
+    set(dwarf_control["microbe"])
+)
+
+print(
+    "\nNEW TOP-100 OVERLAP:"
+)
+
+print(
+    f"COVID19 × Dwarfism case = {len(case_overlap)}"
+)
+
+print(
+    f"COVID19 × Dwarfism control = {len(control_overlap)}"
+)
+
+if len(case_overlap) != 17:
+
+    raise ValueError(
+        f"Expected NEW case overlap = 17, "
+        f"found {len(case_overlap)}"
+    )
+
+if len(control_overlap) != 24:
+
+    raise ValueError(
+        f"Expected NEW control overlap = 24, "
+        f"found {len(control_overlap)}"
+    )
+
+print(
+    "\nPASS — NEW overlap = 17 case + 24 control."
+)
+
+
+# ======================================================================
+# VISUAL STYLE
+# ======================================================================
+
+CASE_COLOR = "#E88982"
+CONTROL_COLOR = "#4C78A8"
+NEUTRAL_COLOR = "#B8B8B8"
+
+plt.rcParams.update({
+    "font.family": "DejaVu Sans",
+    "svg.fonttype": "none",
+    "axes.linewidth": 1.6,
+    "axes.labelsize": 24,
+    "xtick.labelsize": 19,
+    "ytick.labelsize": 19,
+    "figure.dpi": 300
+})
+
+AXIS_LABEL_SIZE = 24
+TICK_SIZE = 19
+TITLE_SIZE = 25
+MICROBE_SIZE = 16
+LEGEND_SIZE = 18
+
+
+# ======================================================================
+# FIGURE 4.1a / 4.1b
+# SHAP VS LFC
+# ======================================================================
+
+def make_shap_lfc(
+    df,
+    disease,
+    group,
+    filename,
+    panel
+):
+
+    if group == "case":
+
+        shap_col = "Case_SHAP_Sum"
+        subtitle = "Disease cases"
+
+    else:
+
+        shap_col = "Control_SHAP_Sum"
+        subtitle = "Healthy controls"
+
+    fig, ax = plt.subplots(
+        figsize=(10.5, 8.5)
+    )
+
+    # --------------------------------------------------------------
+    # Neutral
+    # --------------------------------------------------------------
+
+    neutral = df[
+        df["Association"] == "Neutral"
+    ]
+
+    ax.scatter(
+        neutral[shap_col],
+        neutral["log2FoldChange"],
+        s=90,
+        c=NEUTRAL_COLOR,
+        edgecolors="black",
+        linewidths=0.7,
+        alpha=0.75,
+        zorder=2
+    )
+
+    # --------------------------------------------------------------
+    # Case-associated
+    # --------------------------------------------------------------
+
+    case = df[
+        df["Association"] == "Case-associated"
+    ]
+
+    ax.scatter(
+        case[shap_col],
+        case["log2FoldChange"],
+        s=115,
+        c=CASE_COLOR,
+        edgecolors="black",
+        linewidths=0.9,
+        alpha=0.95,
+        zorder=3
+    )
+
+    # --------------------------------------------------------------
+    # Control-associated
+    # --------------------------------------------------------------
+
+    control = df[
+        df["Association"] == "Control-associated"
+    ]
+
+    ax.scatter(
+        control[shap_col],
+        control["log2FoldChange"],
+        s=115,
+        c=CONTROL_COLOR,
+        edgecolors="black",
+        linewidths=0.9,
+        alpha=0.95,
+        zorder=3
+    )
+
+    # --------------------------------------------------------------
+    # Reference zero lines
+    # --------------------------------------------------------------
+
+    ax.axhline(
+        0,
+        color="black",
+        linestyle="--",
+        linewidth=1.1,
+        alpha=0.55
+    )
+
+    ax.axvline(
+        0,
+        color="black",
+        linestyle="--",
+        linewidth=1.1,
+        alpha=0.55
+    )
+
+    # --------------------------------------------------------------
+    # Label strongest SHAP features
+    # --------------------------------------------------------------
+
+    temp = df.copy()
+
+    temp["abs_shap"] = (
+        temp[shap_col]
+        .abs()
+    )
+
+    strongest = (
+        temp
+        .sort_values(
+            "abs_shap",
+            ascending=False
+        )
+        .head(5)
+    )
+
+    for _, row in strongest.iterrows():
+
+        ax.annotate(
+            row["microbe"],
+            (
+                row[shap_col],
+                row["log2FoldChange"]
+            ),
+            xytext=(7, 7),
+            textcoords="offset points",
+            fontsize=MICROBE_SIZE,
+            fontweight="bold",
+            ha="left",
+            va="bottom",
+            bbox=dict(
+                boxstyle="round,pad=0.15",
+                facecolor="white",
+                edgecolor="none",
+                alpha=0.80
+            )
+        )
+
+    # --------------------------------------------------------------
+    # Labels
+    # --------------------------------------------------------------
+
+    ax.set_xlabel(
+        "Shapley value",
+        fontsize=AXIS_LABEL_SIZE
+    )
+
+    ax.set_ylabel(
+        "log2 fold change (LFC)",
+        fontsize=AXIS_LABEL_SIZE
+    )
+
+    ax.set_title(
+        f"{panel}  {disease} — {subtitle}",
+        fontsize=TITLE_SIZE,
+        fontweight="bold",
+        pad=12
+    )
+
+    # --------------------------------------------------------------
+    # Legend
+    # --------------------------------------------------------------
+
+    handles = [
+
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="none",
+            markerfacecolor=CASE_COLOR,
+            markeredgecolor="black",
+            markersize=10,
+            label="Case-associated"
+        ),
+
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="none",
+            markerfacecolor=CONTROL_COLOR,
+            markeredgecolor="black",
+            markersize=10,
+            label="Control-associated"
+        ),
+
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="none",
+            markerfacecolor=NEUTRAL_COLOR,
+            markeredgecolor="black",
+            markersize=10,
+            label="Neutral"
+        )
+    ]
+
+    ax.legend(
+        handles=handles,
+        fontsize=LEGEND_SIZE,
+        frameon=False,
+        loc="best"
+    )
+
+    ax.tick_params(
+        axis="both",
+        labelsize=TICK_SIZE,
+        width=1.5,
+        length=6
+    )
+
+    ax.grid(
+        False
+    )
+
+    for spine in ax.spines.values():
+
+        spine.set_linewidth(
+            1.6
+        )
+
+    fig.tight_layout()
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
         bbox_inches="tight"
     )
 
-    plt.close()
+    plt.close(
+        fig
+    )
+
+    print(
+        "SAVED:",
+        output
+    )
 
 
-# ============================================================
-# GENERATE FIGURE 2A
-# ============================================================
+# ======================================================================
+# 4.1a — COVID19
+# ======================================================================
 
-plot_shap_lfc(
-    fib,
-    "Fibromyalgia",
-    "a",
-    "Figure_2a_Fibromyalgia_LABELLED.png"
+make_shap_lfc(
+    covid,
+    DISEASE_A,
+    "case",
+    "Figure_4_1a_CASE_COVID19.svg",
+    "4.1a"
+)
+
+make_shap_lfc(
+    covid,
+    DISEASE_A,
+    "control",
+    "Figure_4_1a_CONTROL_COVID19.svg",
+    "4.1a"
 )
 
 
-# ============================================================
-# GENERATE FIGURE 2B
-# ============================================================
+# ======================================================================
+# 4.1b — DWARFISM
+# ======================================================================
 
-plot_shap_lfc(
-    fatigue,
-    "Fatigue",
-    "b",
-    "Figure_2b_Fatigue_LABELLED.png"
+make_shap_lfc(
+    dwarf,
+    DISEASE_B,
+    "case",
+    "Figure_4_1b_CASE_Dwarfism.svg",
+    "4.1b"
+)
+
+make_shap_lfc(
+    dwarf,
+    DISEASE_B,
+    "control",
+    "Figure_4_1b_CONTROL_Dwarfism.svg",
+    "4.1b"
 )
 
 
-# ============================================================
-# FIGURE 2C
-# ============================================================
+# ======================================================================
+# FIGURE 4.1c — SHARED MICROBES
+# ======================================================================
 
-case_species = shared_case[
-    "microbe"
-].tolist()
+def make_rank_plot(
+    disease_a,
+    disease_b,
+    group,
+    filename,
+    panel
+):
 
-control_species = shared_control[
-    "microbe"
-].tolist()
+    a = load_top100(
+        disease_a,
+        group
+    )
+
+    b = load_top100(
+        disease_b,
+        group
+    )
+
+    shared = (
+        set(a["microbe"])
+        &
+        set(b["microbe"])
+    )
+
+    if group == "case":
+
+        color = CASE_COLOR
+
+        ylabel = (
+            "Rank among case-associated microbes"
+        )
+
+    else:
+
+        color = CONTROL_COLOR
+
+        ylabel = (
+            "Rank among control-associated microbes"
+        )
+
+    a = a[
+        a["microbe"].isin(shared)
+    ].copy()
+
+    b = b[
+        b["microbe"].isin(shared)
+    ].copy()
+
+    a = a.rename(
+        columns={
+            "Rank": "Rank_A"
+        }
+    )
+
+    b = b.rename(
+        columns={
+            "Rank": "Rank_B"
+        }
+    )
+
+    merged = a.merge(
+        b,
+        on="microbe"
+    )
+
+    merged["Mean_Rank"] = (
+        merged["Rank_A"]
+        +
+        merged["Rank_B"]
+    ) / 2
+
+    merged = (
+        merged
+        .sort_values(
+            "Mean_Rank"
+        )
+        .reset_index(
+            drop=True
+        )
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(16, 9)
+    )
+
+    x = np.arange(
+        len(merged)
+    )
+
+    # --------------------------------------------------------------
+    # Light dotted vertical divisions
+    # --------------------------------------------------------------
+
+    for xpos in x:
+
+        ax.axvline(
+            xpos,
+            color="black",
+            linestyle=":",
+            linewidth=0.65,
+            alpha=0.30,
+            zorder=0
+        )
+
+    # --------------------------------------------------------------
+    # Connect rankings
+    # --------------------------------------------------------------
+
+    for i, row in merged.iterrows():
+
+        ax.plot(
+            [i, i],
+            [
+                row["Rank_A"],
+                row["Rank_B"]
+            ],
+            color=color,
+            linewidth=1.8,
+            alpha=0.75,
+            zorder=2
+        )
+
+    # --------------------------------------------------------------
+    # Disease A
+    # --------------------------------------------------------------
+
+    ax.scatter(
+        x,
+        merged["Rank_A"],
+        s=110,
+        marker="o",
+        c=color,
+        edgecolors="black",
+        linewidths=0.8,
+        label=disease_a,
+        zorder=4
+    )
+
+    # --------------------------------------------------------------
+    # Disease B
+    # --------------------------------------------------------------
+
+    ax.scatter(
+        x,
+        merged["Rank_B"],
+        s=110,
+        marker="D",
+        c=color,
+        edgecolors="black",
+        linewidths=0.8,
+        label=disease_b,
+        zorder=4
+    )
+
+    # --------------------------------------------------------------
+    # Rank 1 at top
+    # --------------------------------------------------------------
+
+    ax.set_ylim(
+        100.5,
+        0.5
+    )
+
+    ax.set_ylabel(
+        ylabel,
+        fontsize=AXIS_LABEL_SIZE
+    )
+
+    ax.set_xlabel(
+        "Shared microbial species",
+        fontsize=AXIS_LABEL_SIZE
+    )
+
+    ax.set_title(
+        f"{panel}  Shared {group}-associated microbes",
+        fontsize=TITLE_SIZE,
+        fontweight="bold",
+        pad=12
+    )
+
+    # --------------------------------------------------------------
+    # Microbial names CLOSE to x-axis
+    # --------------------------------------------------------------
+
+    ax.set_xticks(
+        x
+    )
+
+    ax.set_xticklabels(
+        merged["microbe"],
+        rotation=90,
+        ha="center",
+        va="top",
+        fontsize=16,
+        fontweight="bold"
+    )
+
+    ax.tick_params(
+        axis="x",
+        pad=0,
+        length=5,
+        width=1.4
+    )
+
+    ax.tick_params(
+        axis="y",
+        labelsize=TICK_SIZE,
+        width=1.5,
+        length=6
+    )
+
+    ax.legend(
+        fontsize=LEGEND_SIZE,
+        frameon=False,
+        loc="upper right"
+    )
+
+    for spine in ax.spines.values():
+
+        spine.set_linewidth(
+            1.6
+        )
+
+    ax.grid(
+        False
+    )
+
+    # Very small bottom margin so names stay close
+    fig.subplots_adjust(
+        left=0.12,
+        right=0.98,
+        top=0.90,
+        bottom=0.34
+    )
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
+        bbox_inches="tight"
+    )
+
+    plt.close(
+        fig
+    )
+
+    print(
+        "SAVED:",
+        output
+    )
+
+    return merged
 
 
-fig, axes = plt.subplots(
-    1,
-    2,
-    figsize=(24, 7)
+# ======================================================================
+# 4.1c CASE
+# ======================================================================
+
+case_rank = make_rank_plot(
+    DISEASE_A,
+    DISEASE_B,
+    "case",
+    "Figure_4_1c_CASE.svg",
+    "4.1c"
 )
 
 
-# ------------------------------------------------------------
-# SHARED CASE-ASSOCIATED MICROBES
-# ------------------------------------------------------------
+# ======================================================================
+# 4.1c CONTROL
+# ======================================================================
 
-x_case = np.arange(
-    len(shared_case)
+control_rank = make_rank_plot(
+    DISEASE_A,
+    DISEASE_B,
+    "control",
+    "Figure_4_1c_CONTROL.svg",
+    "4.1c"
 )
 
-axes[0].scatter(
-    x_case,
-    shared_case[
-        "case_rank_Fibromyalgia"
-    ],
-    marker="o",
-    label="Fibromyalgia"
+
+# ======================================================================
+# SAVE RANK DATA
+# ======================================================================
+
+case_rank.to_csv(
+    OUT_DIR /
+    "Figure_4_1c_CASE_DATA.csv",
+    index=False
 )
 
-axes[0].scatter(
-    x_case,
-    shared_case[
-        "case_rank_Fatigue"
-    ],
-    marker="^",
-    label="Fatigue"
+control_rank.to_csv(
+    OUT_DIR /
+    "Figure_4_1c_CONTROL_DATA.csv",
+    index=False
 )
 
-axes[0].invert_yaxis()
 
-axes[0].set_title(
-    f"Case-associated shared microbes (n = {len(shared_case)})"
+# ======================================================================
+# FINAL FILE CHECK
+# ======================================================================
+
+expected = [
+
+    "Figure_4_1a_CASE_COVID19.svg",
+
+    "Figure_4_1a_CONTROL_COVID19.svg",
+
+    "Figure_4_1b_CASE_Dwarfism.svg",
+
+    "Figure_4_1b_CONTROL_Dwarfism.svg",
+
+    "Figure_4_1c_CASE.svg",
+
+    "Figure_4_1c_CONTROL.svg"
+]
+
+print(
+    "\n" + "=" * 100
 )
 
-axes[0].set_ylabel(
-    "Microbial rank"
+print(
+    "FINAL FIGURE 4.1 FILE CHECK"
 )
 
-axes[0].set_xlabel(
-    "Shared microbial species"
+print(
+    "=" * 100
 )
 
-axes[0].set_xticks(
-    x_case
+for filename in expected:
+
+    path = OUT_DIR / filename
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"Missing expected SVG:\n{path}"
+        )
+
+    print(
+        "VERIFIED:",
+        filename
+    )
+
+
+# ======================================================================
+# ZIP
+# ======================================================================
+
+ZIP_PATH = (
+    BASE /
+    "FINAL_THESIS_FIGURE_4_1_SVG.zip"
 )
 
-axes[0].set_xticklabels(
-    case_species,
-    rotation=90,
-    fontsize=7
-)
+with zipfile.ZipFile(
+    ZIP_PATH,
+    "w",
+    zipfile.ZIP_DEFLATED
+) as z:
 
-axes[0].legend()
+    for filename in expected:
 
+        path = OUT_DIR / filename
 
-# ------------------------------------------------------------
-# SHARED CONTROL-ASSOCIATED MICROBES
-# ------------------------------------------------------------
+        z.write(
+            path,
+            arcname=filename
+        )
 
-x_control = np.arange(
-    len(shared_control)
-)
+    # Also include rank data
+    z.write(
+        OUT_DIR /
+        "Figure_4_1c_CASE_DATA.csv",
+        arcname="Figure_4_1c_CASE_DATA.csv"
+    )
 
-axes[1].scatter(
-    x_control,
-    shared_control[
-        "control_rank_Fibromyalgia"
-    ],
-    marker="o",
-    label="Fibromyalgia"
-)
-
-axes[1].scatter(
-    x_control,
-    shared_control[
-        "control_rank_Fatigue"
-    ],
-    marker="^",
-    label="Fatigue"
-)
-
-axes[1].invert_yaxis()
-
-axes[1].set_title(
-    f"Control-associated shared microbes (n = {len(shared_control)})"
-)
-
-axes[1].set_ylabel(
-    "Microbial rank"
-)
-
-axes[1].set_xlabel(
-    "Shared microbial species"
-)
-
-axes[1].set_xticks(
-    x_control
-)
-
-axes[1].set_xticklabels(
-    control_species,
-    rotation=90,
-    fontsize=7
-)
-
-axes[1].legend()
-
-
-plt.tight_layout()
-
-plt.savefig(
-    "Figure_2c_Fibromyalgia_Fatigue.png",
-    dpi=300,
-    bbox_inches="tight"
-)
-
-plt.close()
+    z.write(
+        OUT_DIR /
+        "Figure_4_1c_CONTROL_DATA.csv",
+        arcname="Figure_4_1c_CONTROL_DATA.csv"
+    )
 
 
 print(
-    "Figure 2a generated."
+    "\nZIP CREATED:"
 )
 
 print(
-    "Figure 2b generated."
+    ZIP_PATH
 )
 
 print(
-    "Figure 2c generated."
+    "\n" + "=" * 100
 )
+
+print(
+    "FIGURE 4.1 GENERATION COMPLETE"
+)
+
+print(
+    "=" * 100
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ============================================================
+# DOWNLOAD FINAL FIGURE 4.1 SVG PACKAGE
+# ============================================================
+
+from google.colab import files
+from pathlib import Path
+import zipfile
+
+OUT_DIR = Path("/content/FINAL_THESIS_FIGURE_4_1_SVG")
+ZIP_PATH = Path("/content/FINAL_THESIS_FIGURE_4_1_SVG.zip")
+
+expected_files = [
+    "Figure_4_1a_CASE_COVID19.svg",
+    "Figure_4_1a_CONTROL_COVID19.svg",
+    "Figure_4_1b_CASE_Dwarfism.svg",
+    "Figure_4_1b_CONTROL_Dwarfism.svg",
+    "Figure_4_1c_CASE.svg",
+    "Figure_4_1c_CONTROL.svg"
+]
+
+# ------------------------------------------------------------
+# Verify all six SVGs exist
+# ------------------------------------------------------------
+
+missing = []
+
+for filename in expected_files:
+    path = OUT_DIR / filename
+
+    if not path.exists():
+        missing.append(filename)
+
+if missing:
+    raise FileNotFoundError(
+        "These SVG files are missing:\n" +
+        "\n".join(missing)
+    )
+
+print("=" * 80)
+print("ALL SIX FIGURE 4.1 SVG FILES VERIFIED")
+print("=" * 80)
+
+for filename in expected_files:
+    print("✓", filename)
+
+
+# ------------------------------------------------------------
+# Create fresh ZIP
+# ------------------------------------------------------------
+
+with zipfile.ZipFile(
+    ZIP_PATH,
+    "w",
+    compression=zipfile.ZIP_DEFLATED
+) as z:
+
+    for filename in expected_files:
+
+        path = OUT_DIR / filename
+
+        z.write(
+            path,
+            arcname=filename
+        )
+
+
+# ------------------------------------------------------------
+# Verify ZIP
+# ------------------------------------------------------------
+
+print("\nZIP CREATED:")
+print(ZIP_PATH)
+
+with zipfile.ZipFile(ZIP_PATH, "r") as z:
+
+    names = z.namelist()
+
+    print("\nFiles inside ZIP:")
+
+    for name in names:
+        print("✓", name)
+
+    if not all(
+        filename in names
+        for filename in expected_files
+    ):
+        raise ValueError(
+            "ZIP verification failed."
+        )
+
+print("\n" + "=" * 80)
+print("ZIP VERIFICATION PASSED")
+print("=" * 80)
+
+# ------------------------------------------------------------
+# Trigger Colab download
+# ------------------------------------------------------------
+
+files.download(
+    str(ZIP_PATH)
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
