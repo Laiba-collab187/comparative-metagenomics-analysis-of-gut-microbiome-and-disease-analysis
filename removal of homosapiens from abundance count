@@ -1,0 +1,524 @@
+# ================================================================
+# CORRECT HOST TAXON FROM ALREADY-TRANSPOSED ABUNDANCE MATRICES
+# ================================================================
+#
+# IMPORTANT:
+# The uploaded "transpose" files are already:
+#
+#       rows    = samples
+#       columns = microbial taxa
+#
+# Therefore:
+#       DO NOT transpose them again.
+#
+# We remove ONLY the exact taxon:
+#       Homo sapiens
+#
+# Then validate all 10 datasets.
+# ================================================================
+
+import os
+import pandas as pd
+import numpy as np
+import zipfile
+
+
+# ================================================================
+# 1. EXACT FILES FROM CURRENT COLAB SESSION
+# ================================================================
+
+ABUNDANCE_FILES = {
+
+    "Autism":
+        "/content/autism transpose 2.tabular",
+
+    "Colorectal_Neoplasm":
+        "/content/colorectal neoplasm transpose 2.tabular",
+
+    "COVID19":
+        "/content/covid  transpose 2.tabular",
+
+    "Dwarfism":
+        "/content/dwarfism transpose 2.tabular",
+
+    "Fatigue":
+        "/content/fatigue transpose 2.tabular",
+
+    "Fibromyalgia":
+        "/content/fibromyalgia transpose 2.tabular",
+
+    "IBS":
+        "/content/ibs transpose 2.tabular",
+
+    "Neuroblastoma":
+        "/content/neurblastoma clean transpose.tabular",
+
+    "Obesity":
+        "/content/obesity transpose 2.tabular",
+
+    "Ulcerative_Colitis":
+        "/content/ulcerative colitis clean transpose.tabular"
+}
+
+
+# ================================================================
+# 2. OUTPUT DIRECTORY
+# ================================================================
+
+OUTDIR = (
+    "/content/"
+    "CORRECTED_MICROBIAL_ABUNDANCE"
+)
+
+os.makedirs(
+    OUTDIR,
+    exist_ok=True
+)
+
+
+# ================================================================
+# 3. QC STORAGE
+# ================================================================
+
+qc_records = []
+
+
+# ================================================================
+# 4. PROCESS ALL 10 DISEASES
+# ================================================================
+
+for disease, filepath in ABUNDANCE_FILES.items():
+
+    print("\n")
+    print("=" * 90)
+    print(disease.upper())
+    print("=" * 90)
+
+    # ------------------------------------------------------------
+    # File existence
+    # ------------------------------------------------------------
+
+    if not os.path.exists(filepath):
+
+        raise FileNotFoundError(
+            f"{disease}: file not found:\n{filepath}"
+        )
+
+
+    # ------------------------------------------------------------
+    # Read already-transposed matrix
+    # ------------------------------------------------------------
+
+    df = pd.read_csv(
+        filepath,
+        sep="\t",
+        dtype=object
+    )
+
+    print(
+        "Original shape:",
+        df.shape
+    )
+
+
+    # ============================================================
+    # 5. SAMPLE-ID COLUMN
+    # ============================================================
+
+    name_candidates = [
+        c for c in df.columns
+        if str(c).strip().lower() == "name"
+    ]
+
+    if len(name_candidates) != 1:
+
+        raise ValueError(
+            f"{disease}: could not uniquely identify "
+            f"'name' column.\n"
+            f"Columns: {list(df.columns[:10])}"
+        )
+
+    if name_candidates[0] != "name":
+
+        df = df.rename(
+            columns={
+                name_candidates[0]: "name"
+            }
+        )
+
+
+    # ============================================================
+    # 6. SAMPLE VALIDATION
+    # ============================================================
+
+    df["name"] = (
+        df["name"]
+        .astype(str)
+        .str.strip()
+    )
+
+    if len(df) != 20:
+
+        raise ValueError(
+            f"{disease}: expected 20 samples, "
+            f"found {len(df)}."
+        )
+
+    if df["name"].duplicated().any():
+
+        duplicates = (
+            df.loc[
+                df["name"].duplicated(),
+                "name"
+            ]
+            .unique()
+            .tolist()
+        )
+
+        raise ValueError(
+            f"{disease}: duplicate sample IDs:\n"
+            f"{duplicates}"
+        )
+
+
+    # ============================================================
+    # 7. TAXON COLUMNS
+    # ============================================================
+
+    species_columns = [
+        c
+        for c in df.columns
+        if c != "name"
+    ]
+
+    print(
+        "Taxa before host removal:",
+        len(species_columns)
+    )
+
+
+    # ============================================================
+    # 8. NUMERIC VALIDATION
+    # ============================================================
+
+    df[species_columns] = (
+        df[species_columns]
+        .apply(
+            pd.to_numeric,
+            errors="coerce"
+        )
+    )
+
+    if df[species_columns].isna().any().any():
+
+        bad_columns = (
+            df[species_columns]
+            .columns[
+                df[species_columns]
+                .isna()
+                .any()
+            ]
+            .tolist()
+        )
+
+        raise ValueError(
+            f"{disease}: non-numeric values detected "
+            f"in:\n{bad_columns[:20]}"
+        )
+
+
+    # ============================================================
+    # 9. CHECK Homo sapiens
+    # ============================================================
+
+    host_column = None
+
+    for col in species_columns:
+
+        if str(col).strip() == "Homo sapiens":
+
+            host_column = col
+            break
+
+
+    if host_column is None:
+
+        raise ValueError(
+            f"{disease}: Homo sapiens was not found. "
+            "Stop rather than silently continuing."
+        )
+
+
+    # ------------------------------------------------------------
+    # Calculate host reads
+    # ------------------------------------------------------------
+
+    host_reads = int(
+        df[host_column]
+        .sum()
+    )
+
+    print(
+        "Homo sapiens FOUND"
+    )
+
+    print(
+        "Homo sapiens total reads:",
+        host_reads
+    )
+
+
+    if host_reads <= 0:
+
+        raise ValueError(
+            f"{disease}: Homo sapiens exists but has "
+            "zero total abundance."
+        )
+
+
+    # ============================================================
+    # 10. REMOVE ONLY Homo sapiens
+    # ============================================================
+
+    corrected = df.drop(
+        columns=[
+            host_column
+        ]
+    ).copy()
+
+
+    # ============================================================
+    # 11. REMOVE COMPLETELY ZERO TAXA
+    # ============================================================
+
+    remaining_species = [
+        c
+        for c in corrected.columns
+        if c != "name"
+    ]
+
+    zero_taxa = [
+        c
+        for c in remaining_species
+        if corrected[c].sum() == 0
+    ]
+
+    if zero_taxa:
+
+        corrected = corrected.drop(
+            columns=zero_taxa
+        )
+
+    print(
+        "Completely zero taxa removed:",
+        len(zero_taxa)
+    )
+
+
+    # ============================================================
+    # 12. FINAL VALIDATION
+    # ============================================================
+
+    final_species = [
+        c
+        for c in corrected.columns
+        if c != "name"
+    ]
+
+    # 20 samples
+    assert len(corrected) == 20
+
+    # No Homo sapiens
+    assert (
+        "Homo sapiens"
+        not in corrected.columns
+    )
+
+    # Numeric
+    assert not (
+        corrected[final_species]
+        .isna()
+        .any()
+        .any()
+    )
+
+    # No duplicate samples
+    assert not corrected["name"].duplicated().any()
+
+
+    # ============================================================
+    # 13. SAVE CORRECTED MATRIX
+    # ============================================================
+
+    output_file = os.path.join(
+        OUTDIR,
+        f"{disease}_CORRECTED_MICROBIAL_ABUNDANCE.tabular"
+    )
+
+    corrected.to_csv(
+        output_file,
+        sep="\t",
+        index=False
+    )
+
+
+    # ============================================================
+    # 14. QC RECORD
+    # ============================================================
+
+    qc_records.append({
+
+        "Disease":
+            disease,
+
+        "Original_samples":
+            len(df),
+
+        "Original_taxa":
+            len(species_columns),
+
+        "Homo_sapiens_present":
+            True,
+
+        "Homo_sapiens_reads_removed":
+            host_reads,
+
+        "Zero_taxa_removed":
+            len(zero_taxa),
+
+        "Final_samples":
+            len(corrected),
+
+        "Final_taxa":
+            len(final_species)
+
+    })
+
+
+    print(
+        "Final samples:",
+        len(corrected)
+    )
+
+    print(
+        "Final microbial taxa:",
+        len(final_species)
+    )
+
+    print(
+        "Saved:",
+        output_file
+    )
+
+
+# ================================================================
+# 15. MASTER QC TABLE
+# ================================================================
+
+qc_df = pd.DataFrame(
+    qc_records
+)
+
+
+qc_file = os.path.join(
+    OUTDIR,
+    "HOST_REMOVAL_QC_SUMMARY.csv"
+)
+
+
+qc_df.to_csv(
+    qc_file,
+    index=False
+)
+
+
+# ================================================================
+# 16. FINAL GLOBAL CHECKS
+# ================================================================
+
+if len(qc_df) != 10:
+
+    raise ValueError(
+        "Expected 10 diseases in QC summary."
+    )
+
+if not (
+    qc_df["Original_samples"] == 20
+).all():
+
+    raise ValueError(
+        "At least one original dataset does not contain "
+        "20 samples."
+    )
+
+if not (
+    qc_df["Final_samples"] == 20
+).all():
+
+    raise ValueError(
+        "At least one corrected dataset does not contain "
+        "20 samples."
+    )
+
+if not (
+    qc_df["Homo_sapiens_present"]
+).all():
+
+    raise ValueError(
+        "Homo sapiens was not detected in every dataset."
+    )
+
+
+# ================================================================
+# 17. DISPLAY FINAL QC
+# ================================================================
+
+print("\n")
+print("=" * 110)
+print("HOST REMOVAL QC SUMMARY")
+print("=" * 110)
+
+print(
+    qc_df.to_string(
+        index=False
+    )
+)
+
+print("\nQC summary:")
+print(qc_file)
+
+print("\nCorrected matrices:")
+print(OUTDIR)
+
+print("\n")
+print("=" * 110)
+print("QC PASSED")
+print("=" * 110)
+
+print(
+    "All 10 datasets contain 20 samples."
+)
+
+print(
+    "Homo sapiens was removed from all 10 datasets."
+)
+
+print(
+    "No additional taxa were removed based on name."
+)
+
+print(
+    "NO ML WAS RUN."
+)
+
+print(
+    "NO SHAP WAS RUN."
+)
+
+print(
+    "NO DESeq2 integration was performed."
+)
+
+
+
+
