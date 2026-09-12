@@ -1,0 +1,1203 @@
+# ================================================================
+# FINAL SHAP + DESeq2 INTEGRATION — CORRECTED PATH VERSION
+# ================================================================
+
+import os
+import re
+import numpy as np
+import pandas as pd
+
+# ================================================================
+# PATHS
+# ================================================================
+
+SHAP_DIR = "/content/FINAL_REFERENCE_ALIGNED_RF_SHAP"
+
+# YOUR DESeq2 FIXED FILES ARE DIRECTLY IN /content
+DESEQ_DIR = "/content"
+
+OUTDIR = "/content/FINAL_SHAP_DESEQ2_INTEGRATION"
+
+os.makedirs(OUTDIR, exist_ok=True)
+
+
+# ================================================================
+# LOCKED 6 DISEASES
+# ================================================================
+
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "COVID19",
+    "Dwarfism",
+    "Neuroblastoma",
+    "Obesity"
+]
+
+
+# ================================================================
+# AUTOMATIC DESeq2 FILE DISCOVERY
+# ================================================================
+
+DESEQ_FILES = {}
+
+for disease in DISEASES:
+
+    filename = (
+        f"{disease}_FIXED_full_DESeq2_results.csv"
+    )
+
+    path = os.path.join(
+        DESEQ_DIR,
+        filename
+    )
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"\n{disease}: DESeq2 file not found:\n{path}\n\n"
+            f"Files currently matching {disease} in /content:\n"
+            + "\n".join(
+                [
+                    f for f in os.listdir("/content")
+                    if disease.lower() in f.lower()
+                    and "deseq" in f.lower()
+                ]
+            )
+        )
+
+    DESEQ_FILES[disease] = path
+
+
+# ================================================================
+# REQUIRED SHAP FILES
+# ================================================================
+
+print("=" * 100)
+print("VERIFYING ALL INPUT FILES")
+print("=" * 100)
+
+for disease in DISEASES:
+
+    required = [
+
+        os.path.join(
+            SHAP_DIR,
+            disease,
+            "RF_SHAP_SUMMARY.csv"
+        ),
+
+        os.path.join(
+            SHAP_DIR,
+            disease,
+            "RF_SHAP_TEST_MATRIX.csv"
+        ),
+
+        os.path.join(
+            SHAP_DIR,
+            disease,
+            "RF_SHAP_HOLDOUT_SAMPLES.csv"
+        ),
+
+        DESEQ_FILES[disease]
+    ]
+
+    for path in required:
+
+        if not os.path.exists(path):
+
+            raise FileNotFoundError(
+                f"\nMissing file for {disease}:\n{path}"
+            )
+
+    print(
+        disease,
+        ": ALL REQUIRED FILES FOUND"
+    )
+
+
+# ================================================================
+# HELPER: IDENTIFY COLUMN
+# ================================================================
+
+def find_column(df, candidates):
+
+    exact = {
+        str(c).strip().lower(): c
+        for c in df.columns
+    }
+
+    for candidate in candidates:
+
+        key = candidate.strip().lower()
+
+        if key in exact:
+            return exact[key]
+
+    for c in df.columns:
+
+        name = str(c).strip().lower()
+
+        for candidate in candidates:
+
+            if candidate.strip().lower() in name:
+                return c
+
+    return None
+
+
+# ================================================================
+# TAXON NORMALIZATION
+# ================================================================
+
+def normalize_taxon(x):
+
+    if pd.isna(x):
+        return ""
+
+    s = str(x).strip()
+
+    for char in [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060"
+    ]:
+        s = s.replace(char, "")
+
+    s = re.sub(
+        r"\s+",
+        " ",
+        s
+    )
+
+    return s
+
+
+# ================================================================
+# PROCESS
+# ================================================================
+
+master_30 = []
+master_top20 = []
+
+for disease in DISEASES:
+
+    print("\n")
+    print("=" * 100)
+    print(disease.upper())
+    print("=" * 100)
+
+    disease_dir = os.path.join(
+        SHAP_DIR,
+        disease
+    )
+
+    # ------------------------------------------------------------
+    # READ SHAP FILES
+    # ------------------------------------------------------------
+
+    shap_summary = pd.read_csv(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_SUMMARY.csv"
+        )
+    )
+
+    shap_matrix = pd.read_csv(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_TEST_MATRIX.csv"
+        )
+    )
+
+    holdout = pd.read_csv(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_HOLDOUT_SAMPLES.csv"
+        )
+    )
+
+    # ------------------------------------------------------------
+    # VALIDATE SHAP
+    # ------------------------------------------------------------
+
+    if len(shap_summary) != 30:
+        raise ValueError(
+            f"{disease}: expected 30 SHAP features, "
+            f"found {len(shap_summary)}"
+        )
+
+    if len(shap_matrix) != 4:
+        raise ValueError(
+            f"{disease}: expected 4 SHAP samples, "
+            f"found {len(shap_matrix)}"
+        )
+
+    if len(holdout) != 4:
+        raise ValueError(
+            f"{disease}: expected 4 holdout samples, "
+            f"found {len(holdout)}"
+        )
+
+    # ------------------------------------------------------------
+    # CHECK SAMPLE ORDER
+    # ------------------------------------------------------------
+
+    if (
+        shap_matrix["name"].astype(str).tolist()
+        !=
+        holdout["name"].astype(str).tolist()
+    ):
+        raise ValueError(
+            f"{disease}: SHAP and holdout sample order mismatch."
+        )
+
+    # ------------------------------------------------------------
+    # SHAP FEATURE LIST
+    # ------------------------------------------------------------
+
+    shap_features = [
+        c for c in shap_matrix.columns
+        if c not in ["name", "label"]
+    ]
+
+    if len(shap_features) != 30:
+        raise ValueError(
+            f"{disease}: expected 30 SHAP matrix features."
+        )
+
+    # ------------------------------------------------------------
+    # HOLDOUT LABELS
+    # ------------------------------------------------------------
+
+    labels = (
+        holdout["label"]
+        .astype(int)
+        .values
+    )
+
+    if not set(labels).issubset({0, 1}):
+        raise ValueError(
+            f"{disease}: holdout labels are not binary."
+        )
+
+    # ------------------------------------------------------------
+    # SHAP VALUES
+    # ------------------------------------------------------------
+
+    shap_values = (
+        shap_matrix[shap_features]
+        .astype(float)
+        .values
+    )
+
+    disease_mask = labels == 1
+    healthy_mask = labels == 0
+
+    if disease_mask.sum() == 0:
+        raise ValueError(
+            f"{disease}: no disease samples in holdout."
+        )
+
+    if healthy_mask.sum() == 0:
+        raise ValueError(
+            f"{disease}: no healthy samples in holdout."
+        )
+
+    # ------------------------------------------------------------
+    # SHAP GROUP VALUES
+    # ------------------------------------------------------------
+
+    disease_sum = (
+        shap_values[disease_mask]
+        .sum(axis=0)
+    )
+
+    healthy_sum = (
+        shap_values[healthy_mask]
+        .sum(axis=0)
+    )
+
+    disease_mean = (
+        shap_values[disease_mask]
+        .mean(axis=0)
+    )
+
+    healthy_mean = (
+        shap_values[healthy_mask]
+        .mean(axis=0)
+    )
+
+    shap_difference = (
+        disease_mean
+        -
+        healthy_mean
+    )
+
+    shap_group = pd.DataFrame({
+
+        "microbe":
+            shap_features,
+
+        "SHAP_disease_sum":
+            disease_sum,
+
+        "SHAP_healthy_sum":
+            healthy_sum,
+
+        "SHAP_disease_mean":
+            disease_mean,
+
+        "SHAP_healthy_mean":
+            healthy_mean,
+
+        "SHAP_disease_minus_healthy":
+            shap_difference
+    })
+
+    shap_group["_taxon_match"] = (
+        shap_group["microbe"]
+        .apply(normalize_taxon)
+    )
+
+    # ------------------------------------------------------------
+    # READ DESeq2
+    # ------------------------------------------------------------
+
+    deseq_path = DESEQ_FILES[disease]
+
+    deseq = pd.read_csv(
+        deseq_path
+    )
+
+    print(
+        "DESeq2 file:",
+        deseq_path
+    )
+
+    print(
+        "DESeq2 shape:",
+        deseq.shape
+    )
+
+    # ------------------------------------------------------------
+    # IDENTIFY DESeq2 COLUMNS
+    # ------------------------------------------------------------
+
+    taxon_col = find_column(
+        deseq,
+        [
+            "microbe",
+            "species",
+            "taxa",
+            "taxon",
+            "name",
+            "feature"
+        ]
+    )
+
+    if taxon_col is None:
+        taxon_col = deseq.columns[0]
+
+    lfc_col = find_column(
+        deseq,
+        [
+            "log2FoldChange",
+            "log2foldchange",
+            "log2_fold_change",
+            "lfc"
+        ]
+    )
+
+    if lfc_col is None:
+        raise ValueError(
+            f"{disease}: log2FoldChange column not found.\n"
+            f"Columns = {list(deseq.columns)}"
+        )
+
+    padj_col = find_column(
+        deseq,
+        [
+            "padj",
+            "adjusted_pvalue",
+            "adjusted_p_value",
+            "fdr"
+        ]
+    )
+
+    if padj_col is None:
+        raise ValueError(
+            f"{disease}: padj column not found.\n"
+            f"Columns = {list(deseq.columns)}"
+        )
+
+    print(
+        "Taxon column:",
+        taxon_col
+    )
+
+    print(
+        "log2FC column:",
+        lfc_col
+    )
+
+    print(
+        "padj column:",
+        padj_col
+    )
+
+    # ------------------------------------------------------------
+    # CLEAN DESeq2
+    # ------------------------------------------------------------
+
+    deseq = deseq.copy()
+
+    deseq["_taxon_match"] = (
+        deseq[taxon_col]
+        .apply(normalize_taxon)
+    )
+
+    # Remove completely blank taxon rows
+    deseq = deseq[
+        deseq["_taxon_match"] != ""
+    ].copy()
+
+    # Duplicate taxa are unsafe for one-to-one integration
+    duplicates = (
+        deseq["_taxon_match"]
+        .duplicated(keep=False)
+    )
+
+    if duplicates.any():
+
+        dup_names = (
+            deseq.loc[
+                duplicates,
+                "_taxon_match"
+            ]
+            .unique()
+            .tolist()
+        )
+
+        raise ValueError(
+            f"{disease}: duplicate DESeq2 taxa detected:\n"
+            + "\n".join(
+                dup_names[:20]
+            )
+        )
+
+    # ------------------------------------------------------------
+    # DESeq2 RELEVANT COLUMNS
+    # ------------------------------------------------------------
+
+    deseq_small = deseq[
+        [
+            "_taxon_match",
+            taxon_col,
+            lfc_col,
+            padj_col
+        ]
+    ].copy()
+
+    deseq_small = deseq_small.rename(
+        columns={
+            taxon_col:
+                "DESeq2_microbe",
+
+            lfc_col:
+                "DESeq2_log2FoldChange",
+
+            padj_col:
+                "DESeq2_padj"
+        }
+    )
+
+    # ------------------------------------------------------------
+    # MERGE
+    # ------------------------------------------------------------
+
+    merged = pd.merge(
+        shap_group,
+        deseq_small,
+        on="_taxon_match",
+        how="left",
+        validate="one_to_one"
+    )
+
+    # ------------------------------------------------------------
+    # MATCH QC
+    # ------------------------------------------------------------
+
+    matched = (
+        merged[
+            "DESeq2_log2FoldChange"
+        ].notna()
+    )
+
+    matched_n = int(
+        matched.sum()
+    )
+
+    unmatched_n = int(
+        (~matched).sum()
+    )
+
+    print(
+        "SHAP taxa:",
+        len(merged)
+    )
+
+    print(
+        "Matched to DESeq2:",
+        matched_n
+    )
+
+    print(
+        "Unmatched:",
+        unmatched_n
+    )
+
+    if unmatched_n > 0:
+
+        print(
+            "\nUnmatched taxa:"
+        )
+
+        print(
+            merged.loc[
+                ~matched,
+                ["microbe"]
+            ]
+            .to_string(index=False)
+        )
+
+    # ------------------------------------------------------------
+    # DIRECTION
+    # ------------------------------------------------------------
+
+    shap_dir = np.where(
+        merged[
+            "SHAP_disease_minus_healthy"
+        ] > 0,
+        "Positive",
+        np.where(
+            merged[
+                "SHAP_disease_minus_healthy"
+            ] < 0,
+            "Negative",
+            "Zero"
+        )
+    )
+
+    deseq_dir = np.where(
+        merged[
+            "DESeq2_log2FoldChange"
+        ] > 0,
+        "Up",
+        np.where(
+            merged[
+                "DESeq2_log2FoldChange"
+            ] < 0,
+            "Down",
+            "Zero"
+        )
+    )
+
+    merged["SHAP_direction"] = shap_dir
+    merged["DESeq2_direction"] = deseq_dir
+
+    # ------------------------------------------------------------
+    # AGREEMENT
+    # ------------------------------------------------------------
+
+    merged["Direction_agreement"] = np.where(
+
+        (
+            (
+                merged[
+                    "SHAP_disease_minus_healthy"
+                ] > 0
+            )
+            &
+            (
+                merged[
+                    "DESeq2_log2FoldChange"
+                ] > 0
+            )
+        )
+        |
+        (
+            (
+                merged[
+                    "SHAP_disease_minus_healthy"
+                ] < 0
+            )
+            &
+            (
+                merged[
+                    "DESeq2_log2FoldChange"
+                ] < 0
+            )
+        ),
+
+        "Agreement",
+
+        np.where(
+
+            (
+                merged[
+                    "SHAP_disease_minus_healthy"
+                ] == 0
+            )
+            |
+            (
+                merged[
+                    "DESeq2_log2FoldChange"
+                ] == 0
+            ),
+
+            "Neutral",
+
+            "Opposite"
+        )
+    )
+
+    # ------------------------------------------------------------
+    # ADD SHAP RANK
+    # ------------------------------------------------------------
+
+    rank_table = shap_summary[
+        [
+            "microbe",
+            "Rank",
+            "mean_abs_SHAP"
+        ]
+    ].copy()
+
+    rank_table["_taxon_match"] = (
+        rank_table["microbe"]
+        .apply(normalize_taxon)
+    )
+
+    rank_table = rank_table.rename(
+        columns={
+            "Rank":
+                "SHAP_rank",
+
+            "mean_abs_SHAP":
+                "Mean_abs_SHAP"
+        }
+    )
+
+    merged = pd.merge(
+        merged,
+        rank_table[
+            [
+                "_taxon_match",
+                "SHAP_rank",
+                "Mean_abs_SHAP"
+            ]
+        ],
+        on="_taxon_match",
+        how="left",
+        validate="one_to_one"
+    )
+
+    # ------------------------------------------------------------
+    # SORT
+    # ------------------------------------------------------------
+
+    merged = (
+        merged
+        .sort_values(
+            "SHAP_rank"
+        )
+        .reset_index(drop=True)
+    )
+
+    merged.insert(
+        0,
+        "Disease",
+        disease
+    )
+
+    merged = merged.drop(
+        columns=["_taxon_match"]
+    )
+
+    # ------------------------------------------------------------
+    # SAVE 30-FEATURE TABLE
+    # ------------------------------------------------------------
+
+    full_path = os.path.join(
+        OUTDIR,
+        f"{disease}_SHAP_DESeq2_INTEGRATED_30_FEATURES.csv"
+    )
+
+    merged.to_csv(
+        full_path,
+        index=False
+    )
+
+    # ------------------------------------------------------------
+    # SAVE TOP 20
+    # ------------------------------------------------------------
+
+    top20 = (
+        merged
+        .sort_values("SHAP_rank")
+        .head(20)
+        .copy()
+    )
+
+    top20_path = os.path.join(
+        OUTDIR,
+        f"{disease}_SHAP_DESeq2_INTEGRATED_TOP20.csv"
+    )
+
+    top20.to_csv(
+        top20_path,
+        index=False
+    )
+
+    master_30.append(
+        merged
+    )
+
+    master_top20.append(
+        top20
+    )
+
+    # ------------------------------------------------------------
+    # PRINT TOP 20
+    # ------------------------------------------------------------
+
+    print("\nTOP 20 SHAP + DESeq2:")
+
+    print(
+        top20[
+            [
+                "SHAP_rank",
+                "microbe",
+                "Mean_abs_SHAP",
+                "SHAP_disease_minus_healthy",
+                "DESeq2_log2FoldChange",
+                "DESeq2_padj",
+                "Direction_agreement"
+            ]
+        ].to_string(index=False)
+    )
+
+
+# ================================================================
+# MASTER FILES
+# ================================================================
+
+master_30_df = pd.concat(
+    master_30,
+    ignore_index=True
+)
+
+master_top20_df = pd.concat(
+    master_top20,
+    ignore_index=True
+)
+
+master_30_path = os.path.join(
+    OUTDIR,
+    "ALL_6_DISEASES_SHAP_DESeq2_INTEGRATED_30_FEATURES.csv"
+)
+
+master_top20_path = os.path.join(
+    OUTDIR,
+    "ALL_6_DISEASES_SHAP_DESeq2_INTEGRATED_TOP20.csv"
+)
+
+master_30_df.to_csv(
+    master_30_path,
+    index=False
+)
+
+
+
+
+
+# ================================================================
+# SHAP + DESeq2 SIGNIFICANT OVERLAP
+# ================================================================
+
+import os
+import pandas as pd
+import numpy as np
+
+INPUT_DIR = "/content/FINAL_SHAP_DESEQ2_INTEGRATION"
+
+OUTDIR = "/content/FINAL_SHAP_DESEQ2_SIGNIFICANT_OVERLAP"
+os.makedirs(OUTDIR, exist_ok=True)
+
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "COVID19",
+    "Dwarfism",
+    "Neuroblastoma",
+    "Obesity"
+]
+
+PADJ_THRESHOLD = 0.05
+
+all_results = []
+
+for disease in DISEASES:
+
+    print("\n" + "=" * 90)
+    print(disease)
+    print("=" * 90)
+
+    input_file = os.path.join(
+        INPUT_DIR,
+        f"{disease}_SHAP_DESeq2_INTEGRATED_30_FEATURES.csv"
+    )
+
+    if not os.path.exists(input_file):
+        raise FileNotFoundError(
+            f"{disease}: missing integration file:\n{input_file}"
+        )
+
+    df = pd.read_csv(input_file)
+
+    required = [
+        "Disease",
+        "microbe",
+        "SHAP_rank",
+        "Mean_abs_SHAP",
+        "SHAP_disease_minus_healthy",
+        "DESeq2_log2FoldChange",
+        "DESeq2_padj"
+    ]
+
+    missing = [
+        c for c in required
+        if c not in df.columns
+    ]
+
+    if missing:
+        raise ValueError(
+            f"{disease}: missing columns: {missing}"
+        )
+
+    # ------------------------------------------------------------
+    # DESeq2 significance
+    # ------------------------------------------------------------
+
+    df["DESeq2_significant"] = (
+        pd.to_numeric(
+            df["DESeq2_padj"],
+            errors="coerce"
+        ) < PADJ_THRESHOLD
+    )
+
+    # ------------------------------------------------------------
+    # Direction according to DESeq2
+    # ------------------------------------------------------------
+
+    df["DESeq2_direction"] = np.where(
+        df["DESeq2_log2FoldChange"] > 0,
+        "Upregulated",
+        np.where(
+            df["DESeq2_log2FoldChange"] < 0,
+            "Downregulated",
+            "Zero"
+        )
+    )
+
+    # ------------------------------------------------------------
+    # SHAP-selected + DESeq2-significant intersection
+    # ------------------------------------------------------------
+
+    overlap = df[
+        df["DESeq2_significant"]
+    ].copy()
+
+    # ------------------------------------------------------------
+    # Sort by SHAP importance
+    # ------------------------------------------------------------
+
+    overlap = (
+        overlap
+        .sort_values(
+            "SHAP_rank"
+        )
+        .reset_index(drop=True)
+    )
+
+    # ------------------------------------------------------------
+    # Save disease-specific overlap
+    # ------------------------------------------------------------
+
+    outfile = os.path.join(
+        OUTDIR,
+        f"{disease}_SHAP_DESeq2_SIGNIFICANT_OVERLAP.csv"
+    )
+
+    overlap.to_csv(
+        outfile,
+        index=False
+    )
+
+    # ------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------
+
+    up = (
+        overlap[
+            "DESeq2_direction"
+        ] == "Upregulated"
+    ).sum()
+
+    down = (
+        overlap[
+            "DESeq2_direction"
+        ] == "Downregulated"
+    ).sum()
+
+    print(
+        "SHAP-selected taxa:",
+        len(df)
+    )
+
+    print(
+        "DESeq2-significant within SHAP set:",
+        len(overlap)
+    )
+
+    print(
+        "Upregulated:",
+        up
+    )
+
+    print(
+        "Downregulated:",
+        down
+    )
+
+    print("\nSignificant SHAP-DESeq2 overlap:")
+
+    if len(overlap) > 0:
+
+        print(
+            overlap[
+                [
+                    "SHAP_rank",
+                    "microbe",
+                    "Mean_abs_SHAP",
+                    "SHAP_disease_minus_healthy",
+                    "DESeq2_log2FoldChange",
+                    "DESeq2_padj",
+                    "DESeq2_direction",
+                    "Direction_agreement"
+                ]
+            ].to_string(index=False)
+        )
+
+    else:
+
+        print("NONE")
+
+    all_results.append(
+        overlap
+    )
+
+
+# ================================================================
+# MASTER OVERLAP TABLE
+# ================================================================
+
+if len(all_results) > 0:
+
+    master_overlap = pd.concat(
+        all_results,
+        ignore_index=True
+    )
+
+else:
+
+    master_overlap = pd.DataFrame()
+
+
+master_file = os.path.join(
+    OUTDIR,
+    "ALL_6_DISEASES_SHAP_DESeq2_SIGNIFICANT_OVERLAP.csv"
+)
+
+master_overlap.to_csv(
+    master_file,
+    index=False
+)
+
+
+# ================================================================
+# DISEASE SUMMARY
+# ================================================================
+
+summary_rows = []
+
+for disease in DISEASES:
+
+    subset = master_overlap[
+        master_overlap["Disease"] == disease
+    ]
+
+    summary_rows.append({
+
+        "Disease":
+            disease,
+
+        "SHAP_selected_features":
+            30,
+
+        "DESeq2_significant_within_SHAP":
+            len(subset),
+
+        "Upregulated":
+            (
+                subset["DESeq2_direction"]
+                == "Upregulated"
+            ).sum(),
+
+        "Downregulated":
+            (
+                subset["DESeq2_direction"]
+                == "Downregulated"
+            ).sum(),
+
+        "Direction_Agreement":
+            (
+                subset["Direction_agreement"]
+                == "Agreement"
+            ).sum(),
+
+        "Direction_Opposite":
+            (
+                subset["Direction_agreement"]
+                == "Opposite"
+            ).sum(),
+
+        "Direction_Neutral":
+            (
+                subset["Direction_agreement"]
+                == "Neutral"
+            ).sum()
+    })
+
+
+summary = pd.DataFrame(
+    summary_rows
+)
+
+summary_file = os.path.join(
+    OUTDIR,
+    "SHAP_DESeq2_SIGNIFICANT_OVERLAP_SUMMARY.csv"
+)
+
+summary.to_csv(
+    summary_file,
+    index=False
+)
+
+
+# ================================================================
+# FINAL CHECK
+# ================================================================
+
+print("\n")
+print("=" * 90)
+print("SHAP + DESeq2 SIGNIFICANT OVERLAP COMPLETED")
+print("=" * 90)
+
+print(
+    summary.to_string(index=False)
+)
+
+print("\nSaved:")
+print(master_file)
+print(summary_file)
+
+print(
+    "\nDisease-specific files saved in:"
+)
+print(OUTDIR)
+
+print(
+    "\nNO ML WAS RERUN."
+)
+print(
+    "NO SHAP WAS RERUN."
+)
+print(
+    "NO DESeq2 WAS RERUN."
+)
+print(
+    "NO DISEASE-PAIR ANALYSIS WAS PERFORMED."
+)
+
+
+
+
+
+
+master_top20_df.to_csv(
+    master_top20_path,
+    index=False
+)
+
+
+# ================================================================
+# FINAL VALIDATION
+# ================================================================
+
+print("\n")
+print("=" * 100)
+print("SHAP + DESeq2 INTEGRATION COMPLETED")
+print("=" * 100)
+
+print(
+    "Total 30-feature rows:",
+    len(master_30_df)
+)
+
+print(
+    "Expected:",
+    180
+)
+
+print(
+    "Total Top-20 rows:",
+    len(master_top20_df)
+)
+
+print(
+    "Expected:",
+    120
+)
+
+if len(master_30_df) != 180:
+    raise ValueError(
+        "ERROR: expected 180 integrated rows."
+    )
+
+if len(master_top20_df) != 120:
+    raise ValueError(
+        "ERROR: expected 120 Top-20 rows."
+    )
+
+print("\nSaved:")
+print(master_30_path)
+print(master_top20_path)
+
+print("\nNO ML WAS RERUN.")
+print("NO SHAP WAS RERUN.")
+print("NO DESeq2 WAS RERUN.")
+print("NO DISEASE-PAIR ANALYS
+IS WAS PERFORMED.")
