@@ -1,476 +1,1855 @@
-# ============================================================
-# FIGURE 5
-# COMBINED DISEASE SIMILARITY NETWORK
-# ============================================================
+# ======================================================================
+# FINAL FIGURE 4.3 — NEW DISEASE SIMILARITY NETWORK
+#
+# DATA SOURCE:
+#   FINAL_REFERENCE_ALIGNED_DISEASE_SIMILARITY_NETWORK
+#
+# USES ONLY THE NEW CORRECTED NETWORK RESULTS.
+#
+# NO OLD THESIS RESULTS
+# NO DESEQ2 RERUN
+# NO ML RERUN
+# NO SHAP RERUN
+#
+# OUTPUT:
+#   Figure_4_3_Disease_Similarity_Network.svg
+#
+# SVG = TRUE VECTOR OUTPUT
+# ======================================================================
 
-import numpy as np
+from pathlib import Path
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-import networkx as nx
-from matplotlib.lines import Line2D
+from matplotlib.patches import FancyArrowPatch
+import zipfile
 
+# ======================================================================
+# PATHS
+# ======================================================================
 
-# ============================================================
-# INPUT FILE
-# ============================================================
+BASE = Path("/content")
+
+NETWORK_DIR = (
+    BASE /
+    "FINAL_REFERENCE_ALIGNED_DISEASE_SIMILARITY_NETWORK"
+)
+
+OUT_DIR = (
+    BASE /
+    "FINAL_THESIS_FIGURE_4_3_SVG"
+)
+
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
 
 EDGE_FILE = (
-    "CORRECTED_Figure_5_Network_Edge_Table.csv"
+    NETWORK_DIR /
+    "FINAL_DISEASE_SIMILARITY_NETWORK_EDGES.csv"
+)
+
+NODE_FILE = (
+    NETWORK_DIR /
+    "FINAL_DISEASE_SIMILARITY_NETWORK_NODES.csv"
+)
+
+OUTPUT_SVG = (
+    OUT_DIR /
+    "Figure_4_3_Disease_Similarity_Network.svg"
+)
+
+OUTPUT_CSV = (
+    OUT_DIR /
+    "Figure_4_3_Network_Edges_Used.csv"
 )
 
 
-# ============================================================
-# LOAD EDGE TABLE
-# ============================================================
+# ======================================================================
+# VERIFY INPUT FILES
+# ======================================================================
+
+print("=" * 100)
+print("FIGURE 4.3 — NEW DISEASE SIMILARITY NETWORK")
+print("=" * 100)
+
+if not EDGE_FILE.exists():
+
+    raise FileNotFoundError(
+        f"\nNetwork edge file not found:\n{EDGE_FILE}"
+    )
+
+if not NODE_FILE.exists():
+
+    raise FileNotFoundError(
+        f"\nNetwork node file not found:\n{NODE_FILE}"
+    )
+
+print("\nEdge file:")
+print(EDGE_FILE)
+
+print("\nNode file:")
+print(NODE_FILE)
+
+
+# ======================================================================
+# LOAD NETWORK DATA
+# ======================================================================
 
 edges = pd.read_csv(
     EDGE_FILE
 )
 
+nodes = pd.read_csv(
+    NODE_FILE
+)
 
-required_columns = [
-    "Disease_1",
-    "Disease_2",
-    "Case_overlap",
-    "Control_overlap",
-    "Total_overlap"
-]
+print("\n" + "=" * 100)
+print("NETWORK INPUT")
+print("=" * 100)
 
+print(
+    "\nEdges shape:",
+    edges.shape
+)
 
-missing_columns = [
-    column
-    for column in required_columns
-    if column not in edges.columns
-]
+print(
+    "Nodes shape:",
+    nodes.shape
+)
 
+print(
+    "\nEdge columns:"
+)
 
-if missing_columns:
+print(
+    list(edges.columns)
+)
 
-    raise ValueError(
-        f"Missing required columns: {missing_columns}"
-    )
+print(
+    "\nNode columns:"
+)
 
-
-# ============================================================
-# CREATE NETWORK
-# ============================================================
-
-G = nx.Graph()
-
-
-for _, row in edges.iterrows():
-
-    G.add_node(
-        row["Disease_1"]
-    )
-
-    G.add_node(
-        row["Disease_2"]
-    )
-
-
-    G.add_edge(
-        row["Disease_1"],
-        row["Disease_2"],
-        case_overlap=int(
-            row["Case_overlap"]
-        ),
-        control_overlap=int(
-            row["Control_overlap"]
-        ),
-        total_overlap=int(
-            row["Total_overlap"]
-        )
-    )
-
-
-# ============================================================
-# CIRCULAR NODE LAYOUT
-# ============================================================
-
-pos = nx.circular_layout(
-    G
+print(
+    list(nodes.columns)
 )
 
 
-# ============================================================
-# CREATE FIGURE
-# ============================================================
+# ======================================================================
+# NORMALIZE COLUMN IDENTIFICATION
+# ======================================================================
 
-fig, ax = plt.subplots(
-    figsize=(16, 16)
-)
-
-
-# ============================================================
-# DRAW NODES
-# ============================================================
-
-nx.draw_networkx_nodes(
-    G,
-    pos,
-    node_size=4200,
-    edgecolors="black",
-    linewidths=1.5,
-    ax=ax
-)
-
-
-nx.draw_networkx_labels(
-    G,
-    pos,
-    font_size=11,
-    font_weight="bold",
-    ax=ax
-)
-
-
-# ============================================================
-# EDGE WIDTH SCALING
-# ============================================================
-
-maximum_overlap = max(
-    edges[
-        [
-            "Case_overlap",
-            "Control_overlap"
-        ]
-    ].max()
-)
-
-
-def scale_width(
-    overlap
+def find_column(
+    df,
+    candidates
 ):
 
-    if maximum_overlap == 0:
-        return 0.5
+    normalized = {
+        str(c).strip().lower().replace(" ", "_"): c
+        for c in df.columns
+    }
 
-    return (
-        0.5
-        + 5.0
-        * overlap
-        / maximum_overlap
-    )
+    for candidate in candidates:
 
-
-# ============================================================
-# DRAW CASE AND CONTROL EDGES
-# ============================================================
-
-for _, row in edges.iterrows():
-
-    disease_1 = row[
-        "Disease_1"
-    ]
-
-    disease_2 = row[
-        "Disease_2"
-    ]
-
-    case_overlap = int(
-        row["Case_overlap"]
-    )
-
-    control_overlap = int(
-        row["Control_overlap"]
-    )
-
-
-    # --------------------------------------------------------
-    # CASE-ASSOCIATED EDGE
-    # --------------------------------------------------------
-
-    if case_overlap > 0:
-
-        nx.draw_networkx_edges(
-            G,
-            pos,
-            edgelist=[
-                (
-                    disease_1,
-                    disease_2
-                )
-            ],
-            width=scale_width(
-                case_overlap
-            ),
-            alpha=0.55,
-            edge_color="salmon",
-            ax=ax
+        key = (
+            candidate
+            .strip()
+            .lower()
+            .replace(" ", "_")
         )
 
+        if key in normalized:
 
-    # --------------------------------------------------------
-    # CONTROL-ASSOCIATED EDGE
-    # --------------------------------------------------------
+            return normalized[key]
 
-    if control_overlap > 0:
+    return None
 
-        nx.draw_networkx_edges(
-            G,
-            pos,
-            edgelist=[
-                (
-                    disease_1,
-                    disease_2
-                )
-            ],
-            width=scale_width(
-                control_overlap
-            ),
-            alpha=0.55,
-            edge_color="steelblue",
-            ax=ax
+
+# ======================================================================
+# FIND EDGE COLUMNS
+# ======================================================================
+
+source_col = find_column(
+    edges,
+    [
+        "Source",
+        "Disease_A",
+        "source"
+    ]
+)
+
+target_col = find_column(
+    edges,
+    [
+        "Target",
+        "Disease_B",
+        "target"
+    ]
+)
+
+weight_col = find_column(
+    edges,
+    [
+        "Edge_Weight",
+        "Weight",
+        "edge_weight"
+    ]
+)
+
+similarity_col = find_column(
+    edges,
+    [
+        "Jaccard_like_similarity",
+        "Similarity",
+        "jaccard_like_similarity"
+    ]
+)
+
+
+if source_col is None:
+
+    raise ValueError(
+        "\nCould not identify source disease column."
+    )
+
+if target_col is None:
+
+    raise ValueError(
+        "\nCould not identify target disease column."
+    )
+
+if weight_col is None:
+
+    raise ValueError(
+        "\nCould not identify Edge_Weight column."
+    )
+
+
+# ======================================================================
+# FIND NODE DISEASE COLUMN
+# ======================================================================
+
+node_disease_col = find_column(
+    nodes,
+    [
+        "Disease",
+        "Node",
+        "name"
+    ]
+)
+
+if node_disease_col is None:
+
+    raise ValueError(
+        "\nCould not identify disease column in node file."
+    )
+
+
+# ======================================================================
+# STANDARDIZE EDGE TABLE
+# ======================================================================
+
+network_edges = pd.DataFrame({
+
+    "Source":
+        edges[source_col].astype(str),
+
+    "Target":
+        edges[target_col].astype(str),
+
+    "Edge_Weight":
+        pd.to_numeric(
+            edges[weight_col],
+            errors="coerce"
         )
+})
 
+if similarity_col is not None:
 
-# ============================================================
-# EDGE LABEL POSITIONS
-# ============================================================
-
-for _, row in edges.iterrows():
-
-    disease_1 = row[
-        "Disease_1"
-    ]
-
-    disease_2 = row[
-        "Disease_2"
-    ]
-
-    case_overlap = int(
-        row["Case_overlap"]
-    )
-
-    control_overlap = int(
-        row["Control_overlap"]
-    )
-
-
-    x1, y1 = pos[
-        disease_1
-    ]
-
-    x2, y2 = pos[
-        disease_2
-    ]
-
-
-    midpoint_x = (
-        x1 + x2
-    ) / 2
-
-    midpoint_y = (
-        y1 + y2
-    ) / 2
-
-
-    dx = x2 - x1
-
-    dy = y2 - y1
-
-
-    length = np.sqrt(
-        dx ** 2
-        + dy ** 2
-    )
-
-
-    if length == 0:
-        continue
-
-
-    perpendicular_x = (
-        -dy / length
-    )
-
-    perpendicular_y = (
-        dx / length
-    )
-
-
-    offset = 0.025
-
-
-    # Case overlap label
-
-    if case_overlap > 0:
-
-        ax.text(
-            midpoint_x
-            + perpendicular_x * offset,
-            midpoint_y
-            + perpendicular_y * offset,
-            str(case_overlap),
-            fontsize=8,
-            ha="center",
-            va="center"
+    network_edges["Jaccard_like_similarity"] = (
+        pd.to_numeric(
+            edges[similarity_col],
+            errors="coerce"
         )
-
-
-    # Control overlap label
-
-    if control_overlap > 0:
-
-        ax.text(
-            midpoint_x
-            - perpendicular_x * offset,
-            midpoint_y
-            - perpendicular_y * offset,
-            str(control_overlap),
-            fontsize=8,
-            ha="center",
-            va="center"
-        )
-
-
-# ============================================================
-# LEGEND
-# ============================================================
-
-legend_elements = [
-
-    Line2D(
-        [0],
-        [0],
-        linewidth=4,
-        label="Case-associated microbial overlap",
-        color="salmon"
-    ),
-
-    Line2D(
-        [0],
-        [0],
-        linewidth=4,
-        label="Control-associated microbial overlap",
-        color="steelblue"
     )
 
+
+# ======================================================================
+# BASIC NETWORK QC
+# ======================================================================
+
+print("\n" + "=" * 100)
+print("NETWORK QC")
+print("=" * 100)
+
+unique_nodes = sorted(
+    set(network_edges["Source"])
+    |
+    set(network_edges["Target"])
+)
+
+print(
+    "\nUnique diseases:",
+    len(unique_nodes)
+)
+
+print(
+    "Disease pairs:",
+    len(network_edges)
+)
+
+if len(unique_nodes) != 10:
+
+    raise ValueError(
+        f"Expected 10 diseases, found {len(unique_nodes)}"
+    )
+
+if len(network_edges) != 45:
+
+    raise ValueError(
+        f"Expected 45 disease pairs, "
+        f"found {len(network_edges)}"
+    )
+
+
+# ======================================================================
+# CHECK SELF-PAIRS
+# ======================================================================
+
+self_pairs = network_edges[
+    network_edges["Source"]
+    ==
+    network_edges["Target"]
 ]
 
+if len(self_pairs) != 0:
 
-ax.legend(
-    handles=legend_elements,
-    loc="upper right"
+    raise ValueError(
+        "Self-pairs detected in disease network."
+    )
+
+
+print(
+    "Self-pairs: NONE"
 )
 
 
-# ============================================================
-# TITLE
-# ============================================================
+# ======================================================================
+# CHECK DUPLICATES
+# ======================================================================
 
-ax.set_title(
-    "Combined Disease Similarity Network Based on Shared Microbial Signatures",
-    fontsize=18,
-    fontweight="bold"
+pair_keys = network_edges.apply(
+    lambda r:
+        tuple(
+            sorted(
+                [
+                    r["Source"],
+                    r["Target"]
+                ]
+            )
+        ),
+    axis=1
 )
 
+if pair_keys.duplicated().any():
+
+    raise ValueError(
+        "Duplicate disease pairs detected."
+    )
+
+print(
+    "Duplicate pairs: NONE"
+)
+
+
+# ======================================================================
+# WEIGHT QC
+# ======================================================================
+
+if network_edges["Edge_Weight"].isna().any():
+
+    raise ValueError(
+        "Missing Edge_Weight values detected."
+    )
+
+print(
+    "Edge weights: VERIFIED"
+)
+
+
+# ======================================================================
+# CALCULATE WEIGHTED DEGREE
+#
+# This is used for node size.
+# ======================================================================
+
+weighted_degree = {}
+
+degree = {}
+
+for disease in unique_nodes:
+
+    incident = network_edges[
+        (
+            network_edges["Source"]
+            ==
+            disease
+        )
+        |
+        (
+            network_edges["Target"]
+            ==
+            disease
+        )
+    ]
+
+    weighted_degree[disease] = (
+        incident["Edge_Weight"]
+        .sum()
+    )
+
+    degree[disease] = len(
+        incident
+    )
+
+
+# ======================================================================
+# NETWORK SUMMARY
+# ======================================================================
+
+network_summary = pd.DataFrame({
+
+    "Disease":
+        unique_nodes,
+
+    "Connections":
+        [
+            degree[d]
+            for d in unique_nodes
+        ],
+
+    "Weighted_Degree":
+        [
+            weighted_degree[d]
+            for d in unique_nodes
+        ]
+})
+
+network_summary = (
+    network_summary
+    .sort_values(
+        "Weighted_Degree",
+        ascending=False
+    )
+    .reset_index(drop=True)
+)
+
+print(
+    "\n" + "=" * 100
+)
+
+print(
+    "NEW DISEASE NETWORK CONNECTIVITY"
+)
+
+print(
+    "=" * 100
+)
+
+print(
+    network_summary.to_string(
+        index=False
+    )
+)
+
+
+# ======================================================================
+# VERIFY EVERY DISEASE HAS 9 CONNECTIONS
+# ======================================================================
+
+if not (
+    network_summary["Connections"]
+    == 9
+).all():
+
+    raise ValueError(
+        "\nEvery disease must have exactly "
+        "9 connections."
+    )
+
+print(
+    "\nPASS — every disease has 9 connections."
+)
+
+
+# ======================================================================
+# SAVE THE EXACT NETWORK DATA USED
+# ======================================================================
+
+network_edges.to_csv(
+    OUTPUT_CSV,
+    index=False
+)
+
+
+# ======================================================================
+# VISUAL STYLE
+#
+# Large readable labels.
+# Clear black network boundaries.
+# SVG text remains editable/searchable.
+# ======================================================================
+
+plt.rcParams.update({
+
+    "font.family":
+        "DejaVu Sans",
+
+    "svg.fonttype":
+        "none",
+
+    "figure.dpi":
+        300,
+
+    "axes.linewidth":
+        1.5
+})
+
+
+# ======================================================================
+# MANUAL CIRCULAR LAYOUT
+#
+# 10 diseases arranged evenly around a circle.
+# This makes every disease and every connection readable.
+# ======================================================================
+
+# Put the most connected disease at the top.
+ordered_diseases = (
+    network_summary[
+        "Disease"
+    ]
+    .tolist()
+)
+
+n = len(
+    ordered_diseases
+)
+
+angles = np.linspace(
+    np.pi / 2,
+    np.pi / 2 + 2 * np.pi,
+    n,
+    endpoint=False
+)
+
+# Radius
+radius = 1.0
+
+positions = {}
+
+for disease, angle in zip(
+    ordered_diseases,
+    angles
+):
+
+    positions[disease] = (
+        radius * np.cos(angle),
+        radius * np.sin(angle)
+    )
+
+
+# ======================================================================
+# NODE SIZE
+#
+# Larger weighted degree = larger node.
+# ======================================================================
+
+min_weight = min(
+    weighted_degree.values()
+)
+
+max_weight = max(
+    weighted_degree.values()
+)
+
+def node_size(weight):
+
+    if max_weight == min_weight:
+
+        return 2300
+
+    return (
+        1500
+        +
+        (
+            (
+                weight - min_weight
+            )
+            /
+            (
+                max_weight - min_weight
+            )
+        )
+        * 2300
+    )
+
+
+# ======================================================================
+# FIGURE
+# ======================================================================
+
+fig, ax = plt.subplots(
+    figsize=(14, 12)
+)
+
+ax.set_aspect(
+    "equal"
+)
 
 ax.axis(
     "off"
 )
 
 
-plt.tight_layout()
+# ======================================================================
+# EDGE WIDTH
+#
+# Stronger disease similarity = thicker edge.
+# ======================================================================
+
+min_edge = network_edges[
+    "Edge_Weight"
+].min()
+
+max_edge = network_edges[
+    "Edge_Weight"
+].max()
 
 
-# ============================================================
-# SAVE FIGURE
-# ============================================================
+def edge_width(weight):
 
-plt.savefig(
-    "Figure_5_Disease_Similarity_Network.png",
-    dpi=300,
-    bbox_inches="tight"
-)
+    if max_edge == min_edge:
 
-plt.close()
+        return 2.0
 
-
-# ============================================================
-# NODE TABLE
-# ============================================================
-
-node_rows = []
-
-
-for node in G.nodes():
-
-    case_weight = 0
-
-    control_weight = 0
-
-
-    for neighbour in G.neighbors(
-        node
-    ):
-
-        edge_data = G[
-            node
-        ][
-            neighbour
-        ]
-
-        case_weight += edge_data[
-            "case_overlap"
-        ]
-
-        control_weight += edge_data[
-            "control_overlap"
-        ]
-
-
-    node_rows.append(
-        {
-            "Disease": node,
-            "Degree":
-                G.degree(node),
-            "Case_weighted_degree":
-                case_weight,
-            "Control_weighted_degree":
-                control_weight,
-            "Total_weighted_degree":
-                case_weight
-                + control_weight
-        }
+    return (
+        1.0
+        +
+        (
+            (
+                weight - min_edge
+            )
+            /
+            (
+                max_edge - min_edge
+            )
+        )
+        * 5.0
     )
 
 
-node_table = pd.DataFrame(
-    node_rows
+# ======================================================================
+# DRAW EDGES
+#
+# Light, semi-transparent network edges.
+# ======================================================================
+
+for _, row in network_edges.iterrows():
+
+    source = row["Source"]
+
+    target = row["Target"]
+
+    weight = row["Edge_Weight"]
+
+    x1, y1 = positions[source]
+
+    x2, y2 = positions[target]
+
+    ax.plot(
+        [x1, x2],
+        [y1, y2],
+        linewidth=edge_width(weight),
+        color="black",
+        alpha=0.28,
+        zorder=1
+    )
+
+
+# ======================================================================
+# DRAW NODES
+#
+# All nodes use the same logical visual treatment.
+# Size represents weighted network connectivity.
+# ======================================================================
+
+for disease in ordered_diseases:
+
+    x, y = positions[disease]
+
+    ax.scatter(
+        x,
+        y,
+        s=node_size(
+            weighted_degree[disease]
+        ),
+        facecolor="white",
+        edgecolor="black",
+        linewidth=2.2,
+        zorder=4
+    )
+
+
+# ======================================================================
+# DISEASE LABELS
+#
+# Large and bold.
+# ======================================================================
+
+for disease in ordered_diseases:
+
+    x, y = positions[disease]
+
+    angle = np.arctan2(
+        y,
+        x
+    )
+
+    label_radius = 1.23
+
+    lx = (
+        label_radius
+        *
+        np.cos(angle)
+    )
+
+    ly = (
+        label_radius
+        *
+        np.sin(angle)
+    )
+
+    # Replace underscore only for display.
+    display_name = (
+        disease
+        .replace(
+            "_",
+            " "
+        )
+    )
+
+    ax.text(
+        lx,
+        ly,
+        display_name,
+        fontsize=21,
+        fontweight="bold",
+        ha="center",
+        va="center",
+        zorder=6
+    )
+
+
+# ======================================================================
+# OPTIONAL CENTER INFORMATION
+#
+# Keeps figure interpretable without overcrowding.
+# ======================================================================
+
+ax.text(
+    0,
+    0,
+    "Disease\nsimilarity",
+    fontsize=22,
+    fontweight="bold",
+    ha="center",
+    va="center",
+    zorder=5
 )
 
-node_table = node_table.sort_values(
-    "Total_weighted_degree",
-    ascending=False
+
+# ======================================================================
+# TITLE
+# ======================================================================
+
+ax.set_title(
+    "Disease Similarity Network",
+    fontsize=27,
+    fontweight="bold",
+    pad=20
 )
 
 
-node_table.to_csv(
-    "Figure_5_Node_Table.csv",
+# ======================================================================
+# LEGEND FOR EDGE MEANING
+# ======================================================================
+
+legend_text = (
+    "Edge thickness = directional microbial overlap\n"
+    "Node size = weighted network connectivity"
+)
+
+ax.text(
+    -1.42,
+    -1.35,
+    legend_text,
+    fontsize=17,
+    fontweight="bold",
+    ha="left",
+    va="top",
+    bbox=dict(
+        boxstyle="round,pad=0.5",
+        facecolor="white",
+        edgecolor="black",
+        linewidth=1.2
+    )
+)
+
+
+# ======================================================================
+# LIMITS
+# ======================================================================
+
+ax.set_xlim(
+    -1.55,
+    1.55
+)
+
+ax.set_ylim(
+    -1.55,
+    1.55
+)
+
+
+# ======================================================================
+# SAVE SVG
+# ======================================================================
+
+fig.savefig(
+    OUTPUT_SVG,
+    format="svg",
+    bbox_inches="tight",
+    pad_inches=0.15
+)
+
+plt.close(
+    fig
+)
+
+
+# ======================================================================
+# FINAL VERIFICATION
+# ======================================================================
+
+if not OUTPUT_SVG.exists():
+
+    raise FileNotFoundError(
+        "\nFigure 4.3 SVG was not created."
+    )
+
+print(
+    "\n" + "=" * 100
+)
+
+print(
+    "FIGURE 4.3 GENERATED"
+)
+
+print(
+    "=" * 100
+)
+
+print(
+    "\nSVG:"
+)
+
+print(
+    OUTPUT_SVG
+)
+
+print(
+    "\nNetwork:"
+)
+
+print(
+    "10 diseases"
+)
+
+print(
+    "45 disease-pair edges"
+)
+
+print(
+    "9 connections per disease"
+)
+
+print(
+    "\nNo old thesis network data used."
+)
+
+
+# ======================================================================
+# CREATE ZIP
+# ======================================================================
+
+ZIP_PATH = (
+    BASE /
+    "FINAL_THESIS_FIGURE_4_3_SVG.zip"
+)
+
+with zipfile.ZipFile(
+    ZIP_PATH,
+    "w",
+    compression=zipfile.ZIP_DEFLATED
+) as z:
+
+    z.write(
+        OUTPUT_SVG,
+        arcname=OUTPUT_SVG.name
+    )
+
+    z.write(
+        OUTPUT_CSV,
+        arcname=OUTPUT_CSV.name
+    )
+
+print(
+    "\nZIP:"
+)
+
+print(
+    ZIP_PATH
+)
+
+print(
+    "\nDONE."
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ======================================================================
+# FIGURE 4.3 — REFERENCE-ALIGNED COMBINED DISEASE SIMILARITY NETWORK
+#
+# REFERENCE FIGURE 5 LOGIC:
+#
+#   Node = disease
+#
+#   Edge = similarity between two diseases
+#
+#   SALMON portion = overlap of top-100 CASE-associated microbes
+#
+#   BLUE portion = overlap of top-100 CONTROL-associated microbes
+#
+#   TOTAL EDGE WEIGHT =
+#       case-associated overlap
+#       +
+#       control-associated overlap
+#
+#   EDGE LABEL =
+#       total overlapped microbes
+#
+# IMPORTANT:
+#   Uses ONLY the NEW corrected 45-pair overlap results.
+#
+# NO OLD THESIS RESULTS
+# NO SHAP RERUN
+# NO ML RERUN
+# NO DESeq2 RERUN
+# ======================================================================
+
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import zipfile
+
+
+# ======================================================================
+# PATHS
+# ======================================================================
+
+BASE = Path("/content")
+
+PAIR_FILE = (
+    BASE /
+    "FINAL_CORRECTED_REFERENCE_ALIGNED_DISEASE_PAIR_OVERLAP" /
+    "ALL_45_CORRECTED_DISEASE_PAIRS_OVERLAP.csv"
+)
+
+OUT_DIR = (
+    BASE /
+    "FINAL_THESIS_FIGURE_4_3_CORRECT_NETWORK_SVG"
+)
+
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+OUTPUT_SVG = (
+    OUT_DIR /
+    "Figure_4_3_Disease_Similarity_Network.svg"
+)
+
+OUTPUT_CSV = (
+    OUT_DIR /
+    "Figure_4_3_NETWORK_DATA_USED.csv"
+)
+
+OUTPUT_ZIP = (
+    BASE /
+    "FINAL_THESIS_FIGURE_4_3_CORRECT_NETWORK_SVG.zip"
+)
+
+
+# ======================================================================
+# LOAD NEW 45-PAIR RESULTS
+# ======================================================================
+
+print("=" * 100)
+print("FIGURE 4.3 — NEW COMBINED DISEASE SIMILARITY NETWORK")
+print("=" * 100)
+
+if not PAIR_FILE.exists():
+
+    raise FileNotFoundError(
+        f"\nNEW corrected 45-pair file not found:\n{PAIR_FILE}"
+    )
+
+df = pd.read_csv(
+    PAIR_FILE
+)
+
+print(
+    "\nInput:"
+)
+
+print(
+    PAIR_FILE
+)
+
+print(
+    "\nShape:",
+    df.shape
+)
+
+
+# ======================================================================
+# REQUIRED COLUMNS
+# ======================================================================
+
+required_columns = [
+    "Disease_A",
+    "Disease_B",
+    "Disease_enriched_overlap_n",
+    "Healthy_enriched_overlap_n",
+    "Total_directional_overlap_n"
+]
+
+missing = [
+    c for c in required_columns
+    if c not in df.columns
+]
+
+if missing:
+
+    raise ValueError(
+        f"\nMissing required columns:\n{missing}"
+    )
+
+
+# ======================================================================
+# STRICT NEW-RESULT QC
+# ======================================================================
+
+if len(df) != 45:
+
+    raise ValueError(
+        f"Expected 45 disease pairs, found {len(df)}"
+    )
+
+
+# Check total = case + control
+total_check = (
+    df["Disease_enriched_overlap_n"]
+    +
+    df["Healthy_enriched_overlap_n"]
+)
+
+if not np.array_equal(
+    total_check.astype(int),
+    df["Total_directional_overlap_n"].astype(int)
+):
+
+    raise ValueError(
+        "\nTotal directional overlap does not equal "
+        "case + control overlap."
+    )
+
+
+# Check self pairs
+if (
+    df["Disease_A"]
+    ==
+    df["Disease_B"]
+).any():
+
+    raise ValueError(
+        "\nSelf-pairs detected."
+    )
+
+
+# Check duplicate unordered pairs
+pair_keys = df.apply(
+    lambda r: tuple(
+        sorted(
+            [
+                str(r["Disease_A"]),
+                str(r["Disease_B"])
+            ]
+        )
+    ),
+    axis=1
+)
+
+if pair_keys.duplicated().any():
+
+    raise ValueError(
+        "\nDuplicate disease pairs detected."
+    )
+
+
+# ======================================================================
+# DISEASE LIST
+# ======================================================================
+
+diseases = sorted(
+    set(df["Disease_A"])
+    |
+    set(df["Disease_B"])
+)
+
+if len(diseases) != 10:
+
+    raise ValueError(
+        f"Expected 10 diseases, found {len(diseases)}"
+    )
+
+
+print("\n" + "=" * 100)
+print("NEW NETWORK QC")
+print("=" * 100)
+
+print(
+    "\n10 diseases: VERIFIED"
+)
+
+print(
+    "45 disease pairs: VERIFIED"
+)
+
+print(
+    "No self-pairs: VERIFIED"
+)
+
+print(
+    "No duplicate pairs: VERIFIED"
+)
+
+print(
+    "Case + control = total: VERIFIED"
+)
+
+
+# ======================================================================
+# STANDARDIZE DATA
+# ======================================================================
+
+network = df[
+    [
+        "Disease_A",
+        "Disease_B",
+        "Disease_enriched_overlap_n",
+        "Healthy_enriched_overlap_n",
+        "Total_directional_overlap_n"
+    ]
+].copy()
+
+network.columns = [
+    "Disease_A",
+    "Disease_B",
+    "Case_overlap",
+    "Control_overlap",
+    "Total_overlap"
+]
+
+network[
+    [
+        "Case_overlap",
+        "Control_overlap",
+        "Total_overlap"
+    ]
+] = network[
+    [
+        "Case_overlap",
+        "Control_overlap",
+        "Total_overlap"
+    ]
+].astype(int)
+
+
+# ======================================================================
+# SAVE EXACT DATA USED
+# ======================================================================
+
+network.to_csv(
+    OUTPUT_CSV,
     index=False
 )
 
 
+# ======================================================================
+# COLORS — REFERENCE FIGURE LOGIC
+#
+# Salmon = case-associated overlap
+# Blue   = control-associated overlap
+# ======================================================================
+
+CASE_COLOR = "#E88982"
+CONTROL_COLOR = "#4C78A8"
+
+NODE_FACE = "white"
+NODE_EDGE = "black"
+
+
+# ======================================================================
+# FONT / SVG SETTINGS
+# ======================================================================
+
+plt.rcParams.update({
+
+    "font.family":
+        "DejaVu Sans",
+
+    # Keep text as text in SVG
+    "svg.fonttype":
+        "none",
+
+    "figure.dpi":
+        300,
+
+    "axes.linewidth":
+        1.5
+})
+
+
+# ======================================================================
+# CIRCULAR NODE POSITIONS
+#
+# We use a clean circular arrangement like the reference network,
+# rather than making node size represent another biological variable.
+# ======================================================================
+
+# Put diseases in a stable order.
+# This makes the figure reproducible.
+
+diseases_order = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "COVID19",
+    "Dwarfism",
+    "Fatigue",
+    "Fibromyalgia",
+    "IBS",
+    "Neuroblastoma",
+    "Obesity",
+    "Ulcerative_Colitis"
+]
+
+# Make sure all are present
+if set(diseases_order) != set(diseases):
+
+    raise ValueError(
+        "\nDisease list mismatch."
+    )
+
+
+n = len(
+    diseases_order
+)
+
+# Start at top
+angles = (
+    np.pi / 2
+    -
+    np.arange(n)
+    *
+    2 * np.pi / n
+)
+
+radius = 1.0
+
+positions = {}
+
+for disease, angle in zip(
+    diseases_order,
+    angles
+):
+
+    positions[disease] = (
+        radius * np.cos(angle),
+        radius * np.sin(angle)
+    )
+
+
+# ======================================================================
+# EDGE WIDTH SCALING
+#
+# Width represents TOTAL overlap.
+# ======================================================================
+
+min_total = network[
+    "Total_overlap"
+].min()
+
+max_total = network[
+    "Total_overlap"
+].max()
+
+
+def total_width(total):
+
+    if max_total == min_total:
+
+        return 3.0
+
+    return (
+        1.5
+        +
+        (
+            total - min_total
+        )
+        /
+        (
+            max_total - min_total
+        )
+        *
+        7.0
+    )
+
+
+# ======================================================================
+# CREATE FIGURE
+# ======================================================================
+
+fig, ax = plt.subplots(
+    figsize=(15, 15)
+)
+
+ax.set_aspect(
+    "equal"
+)
+
+ax.axis(
+    "off"
+)
+
+
+# ======================================================================
+# DRAW COMBINED EDGES
+#
+# THIS IS THE IMPORTANT CORRECTION.
+#
+# Each disease pair gets ONE total-width edge.
+#
+# That edge is divided proportionally into:
+#
+#     SALMON = CASE OVERLAP
+#     BLUE   = CONTROL OVERLAP
+#
+# Example:
+#
+#     Case = 17
+#     Control = 24
+#     Total = 41
+#
+# Salmon portion = 17/41
+# Blue portion   = 24/41
+# ======================================================================
+
+for _, row in network.iterrows():
+
+    disease_a = row["Disease_A"]
+    disease_b = row["Disease_B"]
+
+    case_n = row["Case_overlap"]
+    control_n = row["Control_overlap"]
+    total_n = row["Total_overlap"]
+
+    x1, y1 = positions[
+        disease_a
+    ]
+
+    x2, y2 = positions[
+        disease_b
+    ]
+
+    # --------------------------------------------------------------
+    # TOTAL EDGE WIDTH
+    # --------------------------------------------------------------
+
+    width = total_width(
+        total_n
+    )
+
+    # --------------------------------------------------------------
+    # Split total edge width proportionally
+    # --------------------------------------------------------------
+
+    if total_n > 0:
+
+        case_width = (
+            width
+            *
+            case_n
+            /
+            total_n
+        )
+
+        control_width = (
+            width
+            *
+            control_n
+            /
+            total_n
+        )
+
+    else:
+
+        case_width = 0
+        control_width = 0
+
+    # --------------------------------------------------------------
+    # DRAW CASE / SALMON PORTION
+    #
+    # Slight perpendicular offset makes both components visible.
+    # --------------------------------------------------------------
+
+    dx = x2 - x1
+    dy = y2 - y1
+
+    length = np.sqrt(
+        dx**2 + dy**2
+    )
+
+    if length == 0:
+        continue
+
+    # Unit perpendicular vector
+    px = -dy / length
+    py = dx / length
+
+    # Very small offset
+    offset = 0.006
+
+    # Salmon line
+    ax.plot(
+        [
+            x1 + px * offset,
+            x2 + px * offset
+        ],
+        [
+            y1 + py * offset,
+            y2 + py * offset
+        ],
+        color=CASE_COLOR,
+        linewidth=max(
+            case_width,
+            0.8 if case_n > 0 else 0
+        ),
+        solid_capstyle="round",
+        alpha=0.90,
+        zorder=1
+    )
+
+    # Blue line
+    ax.plot(
+        [
+            x1 - px * offset,
+            x2 - px * offset
+        ],
+        [
+            y1 - py * offset,
+            y2 - py * offset
+        ],
+        color=CONTROL_COLOR,
+        linewidth=max(
+            control_width,
+            0.8 if control_n > 0 else 0
+        ),
+        solid_capstyle="round",
+        alpha=0.90,
+        zorder=1
+    )
+
+
+# ======================================================================
+# EDGE NUMBERS
+#
+# Reference says the number on the edge is proportional to the
+# overlapped microbes.
+#
+# We display the actual TOTAL overlap number.
+#
+# Example:
+#     41
+#
+# while the edge itself visually shows:
+#     17 case + 24 control
+# ======================================================================
+
+for _, row in network.iterrows():
+
+    disease_a = row["Disease_A"]
+    disease_b = row["Disease_B"]
+
+    case_n = row["Case_overlap"]
+    control_n = row["Control_overlap"]
+    total_n = row["Total_overlap"]
+
+    x1, y1 = positions[
+        disease_a
+    ]
+
+    x2, y2 = positions[
+        disease_b
+    ]
+
+    # Midpoint
+    mx = (
+        x1 + x2
+    ) / 2
+
+    my = (
+        y1 + y2
+    ) / 2
+
+    dx = x2 - x1
+    dy = y2 - y1
+
+    length = np.sqrt(
+        dx**2 + dy**2
+    )
+
+    px = -dy / length
+    py = dx / length
+
+    # Place label slightly away from edge
+    label_offset = 0.035
+
+    lx = (
+        mx
+        +
+        px * label_offset
+    )
+
+    ly = (
+        my
+        +
+        py * label_offset
+    )
+
+    ax.text(
+        lx,
+        ly,
+        str(total_n),
+        fontsize=15,
+        fontweight="bold",
+        ha="center",
+        va="center",
+        zorder=5,
+        bbox=dict(
+            boxstyle="round,pad=0.16",
+            facecolor="white",
+            edgecolor="none",
+            alpha=0.90
+        )
+    )
+
+
+# ======================================================================
+# DRAW DISEASE NODES
+#
+# Same node size for every disease.
+#
+# This is important:
+# the reference does NOT use node size as weighted degree.
+# ======================================================================
+
+NODE_SIZE = 2500
+
+for disease in diseases_order:
+
+    x, y = positions[
+        disease
+    ]
+
+    ax.scatter(
+        x,
+        y,
+        s=NODE_SIZE,
+        facecolor=NODE_FACE,
+        edgecolor=NODE_EDGE,
+        linewidth=2.2,
+        zorder=4
+    )
+
+
+# ======================================================================
+# DISEASE LABELS
+# ======================================================================
+
+for disease in diseases_order:
+
+    x, y = positions[
+        disease
+    ]
+
+    angle = np.arctan2(
+        y,
+        x
+    )
+
+    label_radius = 1.18
+
+    lx = (
+        label_radius
+        *
+        np.cos(angle)
+    )
+
+    ly = (
+        label_radius
+        *
+        np.sin(angle)
+    )
+
+    display_name = (
+        disease
+        .replace(
+            "_",
+            " "
+        )
+    )
+
+    ax.text(
+        lx,
+        ly,
+        display_name,
+        fontsize=22,
+        fontweight="bold",
+        ha="center",
+        va="center",
+        zorder=6
+    )
+
+
+# ======================================================================
+# LEGEND
+#
+# Explicitly communicates the biological meaning of edge colors.
+# ======================================================================
+
+legend_handles = [
+
+    Line2D(
+        [0],
+        [0],
+        color=CASE_COLOR,
+        linewidth=7,
+        label="Case-associated overlap"
+    ),
+
+    Line2D(
+        [0],
+        [0],
+        color=CONTROL_COLOR,
+        linewidth=7,
+        label="Control-associated overlap"
+    )
+]
+
+legend = ax.legend(
+    handles=legend_handles,
+    loc="lower center",
+    bbox_to_anchor=(0.5, -0.055),
+    ncol=2,
+    frameon=False,
+    fontsize=18,
+    handlelength=2.5
+)
+
+
+# ======================================================================
+# TITLE
+# ======================================================================
+
+ax.set_title(
+    "Disease Similarity Network",
+    fontsize=28,
+    fontweight="bold",
+    pad=25
+)
+
+
+# ======================================================================
+# LIMITS
+# ======================================================================
+
+ax.set_xlim(
+    -1.48,
+    1.48
+)
+
+ax.set_ylim(
+    -1.48,
+    1.48
+)
+
+
+# ======================================================================
+# SAVE SVG
+# ======================================================================
+
+fig.savefig(
+    OUTPUT_SVG,
+    format="svg",
+    bbox_inches="tight",
+    pad_inches=0.15
+)
+
+plt.close(
+    fig
+)
+
+
+# ======================================================================
+# FINAL VERIFICATION
+# ======================================================================
+
+if not OUTPUT_SVG.exists():
+
+    raise FileNotFoundError(
+        "\nFigure 4.3 SVG was not created."
+    )
+
+print("\n" + "=" * 100)
+print("FIGURE 4.3 — FINAL QC")
+print("=" * 100)
+
 print(
-    "Figure 5 generated."
+    "\n10 diseases: VERIFIED"
 )
 
 print(
-    "\nNetwork nodes:",
-    G.number_of_nodes()
+    "45 disease pairs: VERIFIED"
 )
 
 print(
-    "Network edges:",
-    G.number_of_edges()
+    "Case-associated overlap: salmon"
 )
 
 print(
-    "\nNode table:"
+    "Control-associated overlap: blue"
 )
 
 print(
-    node_table
+    "Total edge weight = case + control"
 )
+
+print(
+    "Edge labels = total overlap"
+)
+
+print(
+    "Node sizes: equal"
+)
+
+print(
+    "SVG vector output: VERIFIED"
+)
+
+print(
+    "\nSaved:"
+)
+
+print(
+    OUTPUT_SVG
+)
+
+
+# ======================================================================
+# ZIP
+# ======================================================================
+
+with zipfile.ZipFile(
+    OUTPUT_ZIP,
+    "w",
+    compression=zipfile.ZIP_DEFLATED
+) as z:
+
+    z.write(
+        OUTPUT_SVG,
+        arcname=OUTPUT_SVG.name
+    )
+
+    z.write(
+        OUTPUT_CSV,
+        arcname=OUTPUT_CSV.name
+    )
+
+print(
+    "\nZIP:"
+)
+
+print(
+    OUTPUT_ZIP
+)
+
+print(
+    "\n" + "=" * 100
+)
+
+print(
+    "FIGURE 4.3 COMPLETE"
+)
+
+print(
+    "=" * 100
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
