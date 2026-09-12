@@ -6122,7 +6122,2287 @@ files.download(zip_path)
 
 
 
+# ============================================================
+# NEW RESULTS ONLY
+# DATA-DRIVEN STRONGEST DISEASE PAIR
+# ============================================================
+#
+# IMPORTANT:
+# This code does NOT use any previous thesis pair selection.
+# It does NOT assume Fibromyalgia, Fatigue, IBS, etc.
+#
+# It starts from the NEW DESeq2 result files currently in
+# the Colab /content directory.
+#
+# ============================================================
 
+import os
+import re
+import glob
+import itertools
+import pandas as pd
+import numpy as np
+
+print("=" * 80)
+print("STARTING NEW-RESULTS DISEASE SIMILARITY ANALYSIS")
+print("=" * 80)
+
+
+# ============================================================
+# 1. SHOW ALL CSV FILES CURRENTLY IN COLAB
+# ============================================================
+
+all_csv = sorted(
+    glob.glob("/content/**/*.csv", recursive=True)
+)
+
+print("\nTotal CSV files found:", len(all_csv))
+
+for f in all_csv:
+    print(" -", f)
+
+
+# ============================================================
+# 2. IDENTIFY DESEQ2 RESULT FILES
+# ============================================================
+#
+# We preferentially look for filenames containing:
+# deseq2 / deseq / results
+#
+# We DO NOT use:
+#   - old Top100 files
+#   - old overlap files
+#   - old Figure files
+#   - old shared-microbe files
+#
+# because we want to reconstruct the analysis from the
+# underlying NEW DESeq2 results.
+# ============================================================
+
+candidate_files = []
+
+for f in all_csv:
+
+    name = os.path.basename(f).lower()
+
+    # Skip files that are clearly downstream outputs
+    downstream_words = [
+        "top100",
+        "overlap",
+        "shared",
+        "similarity",
+        "figure",
+        "matrix",
+        "audit",
+        "network",
+        "shap",
+        "biomarker",
+        "ranked"
+    ]
+
+    if any(word in name for word in downstream_words):
+        continue
+
+    # Prefer files that look like DESeq2 results
+    if (
+        "deseq" in name
+        or "deseq2" in name
+        or "differential" in name
+    ):
+        candidate_files.append(f)
+
+
+print("\n" + "=" * 80)
+print("DESeq2 CANDIDATE FILES")
+print("=" * 80)
+
+for f in candidate_files:
+    print(" -", f)
+
+print("\nNumber of candidate DESeq2 files:", len(candidate_files))
+
+
+# ============================================================
+# 3. READ EACH CANDIDATE AND INSPECT ITS COLUMNS
+# ============================================================
+
+print("\n" + "=" * 80)
+print("FILE STRUCTURE AUDIT")
+print("=" * 80)
+
+file_info = []
+
+for f in candidate_files:
+
+    try:
+        df = pd.read_csv(f)
+
+        file_info.append({
+            "file": f,
+            "rows": df.shape[0],
+            "columns": df.shape[1],
+            "column_names": list(df.columns)
+        })
+
+        print("\nFILE:")
+        print(os.path.basename(f))
+
+        print("Shape:", df.shape)
+
+        print("Columns:")
+        print(list(df.columns))
+
+    except Exception as e:
+
+        print(
+            "\nERROR READING:",
+            f,
+            "\n",
+            e
+        )
+
+
+# ============================================================
+# 4. DISEASE NAME EXTRACTION
+# ============================================================
+#
+# The code tries to infer disease names from filenames.
+#
+# If your files are named, for example:
+#
+# Autism_DESeq2_full_results.csv
+# fatigue all_results.csv
+# fibromyalgia deseq2_results.csv
+#
+# this section will identify the disease names.
+#
+# ============================================================
+
+KNOWN_DISEASES = [
+    "Autism",
+    "Colorectal neoplasm",
+    "Dwarfism",
+    "Ulcerative colitis",
+    "Fibromyalgia",
+    "IBS",
+    "Fatigue",
+    "Obesity",
+    "Neuroblastoma",
+    "COVID-19"
+]
+
+
+def identify_disease(filename):
+
+    name = os.path.basename(filename).lower()
+
+    disease_patterns = {
+
+        "Autism": [
+            "autism",
+            "asd"
+        ],
+
+        "Colorectal neoplasm": [
+            "colorectal",
+            "crc"
+        ],
+
+        "Dwarfism": [
+            "dwarfism"
+        ],
+
+        "Ulcerative colitis": [
+            "ulcerative",
+            "colitis"
+        ],
+
+        "Fibromyalgia": [
+            "fibromyalgia"
+        ],
+
+        "IBS": [
+            "ibs",
+            "irritable"
+        ],
+
+        "Fatigue": [
+            "fatigue"
+        ],
+
+        "Obesity": [
+            "obesity"
+        ],
+
+        "Neuroblastoma": [
+            "neuroblastoma"
+        ],
+
+        "COVID-19": [
+            "covid"
+        ]
+    }
+
+    matches = []
+
+    for disease, patterns in disease_patterns.items():
+
+        for pattern in patterns:
+
+            if pattern in name:
+                matches.append(disease)
+                break
+
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
+# ============================================================
+# 5. BUILD DISEASE → FILE TABLE
+# ============================================================
+
+disease_files = {}
+
+for f in candidate_files:
+
+    disease = identify_disease(f)
+
+    if disease is not None:
+
+        if disease in disease_files:
+
+            print(
+                "\nWARNING: More than one candidate file "
+                "found for:",
+                disease
+            )
+
+            print("Existing:", disease_files[disease])
+            print("New:", f)
+
+        else:
+
+            disease_files[disease] = f
+
+
+print("\n" + "=" * 80)
+print("DISEASE → DESEQ2 FILE MAPPING")
+print("=" * 80)
+
+for disease in KNOWN_DISEASES:
+
+    if disease in disease_files:
+        print(
+            f"{disease:25s} -> "
+            f"{os.path.basename(disease_files[disease])}"
+        )
+    else:
+        print(
+            f"{disease:25s} -> NOT FOUND"
+        )
+
+
+# ============================================================
+# 6. CHECK THAT WE HAVE 10 DISEASES
+# ============================================================
+
+found_diseases = list(disease_files.keys())
+
+print("\nDiseases found:", len(found_diseases))
+print(found_diseases)
+
+if len(found_diseases) != 10:
+
+    print("\n" + "!" * 80)
+    print("WARNING")
+    print("The code did not find exactly 10 disease DESeq2 files.")
+    print("DO NOT continue to interpretation yet.")
+    print("!" * 80)
+
+else:
+
+    print("\nPASS: All 10 disease datasets were found.")
+
+
+# ============================================================
+# 7. FUNCTION TO IDENTIFY LFC CONFIDENCE-LIMIT COLUMNS
+# ============================================================
+#
+# The reference method uses:
+#
+# CASE:
+# highest 5% LFC confidence limit
+#
+# CONTROL:
+# lowest 95% LFC confidence limit
+#
+# Depending on your DESeq2 output, these may appear as:
+#
+# lfcSE
+# lfc_5CI
+# lfc_95CI
+#
+# or:
+#
+# LFC_5CI
+# LFC_95CI
+#
+# or another naming convention.
+#
+# ============================================================
+
+
+def find_column(df, possible_names):
+
+    lower_map = {
+        str(c).lower().strip(): c
+        for c in df.columns
+    }
+
+    for name in possible_names:
+
+        if name.lower() in lower_map:
+            return lower_map[name.lower()]
+
+    return None
+
+
+def identify_columns(df):
+
+    # microbial species column
+    microbe_col = find_column(
+        df,
+        [
+            "microbe",
+            "species",
+            "taxon",
+            "taxa",
+            "name"
+        ]
+    )
+
+    # LFC
+    lfc_col = find_column(
+        df,
+        [
+            "log2FoldChange",
+            "log2foldchange",
+            "log2FC",
+            "LFC"
+        ]
+    )
+
+    # lower confidence limit
+    lfc5_col = find_column(
+        df,
+        [
+            "LFC_5CI",
+            "lfc_5ci",
+            "LFC_5CI_lower",
+            "lfc_5ci_lower",
+            "log2FoldChange_5CI"
+        ]
+    )
+
+    # upper confidence limit
+    lfc95_col = find_column(
+        df,
+        [
+            "LFC_95CI",
+            "lfc_95ci",
+            "LFC_95CI_upper",
+            "lfc_95ci_upper",
+            "log2FoldChange_95CI"
+        ]
+    )
+
+    # baseMean
+    basemean_col = find_column(
+        df,
+        [
+            "baseMean",
+            "basemean"
+        ]
+    )
+
+    # adjusted p value
+    padj_col = find_column(
+        df,
+        [
+            "padj",
+            "adjusted_pvalue",
+            "adjusted_p_value",
+            "FDR"
+        ]
+    )
+
+    return {
+        "microbe": microbe_col,
+        "lfc": lfc_col,
+        "lfc5": lfc5_col,
+        "lfc95": lfc95_col,
+        "baseMean": basemean_col,
+        "padj": padj_col
+    }
+
+
+# ============================================================
+# 8. AUDIT ALL 10 DESEQ2 FILES
+# ============================================================
+
+print("\n" + "=" * 80)
+print("DESEQ2 COLUMN AUDIT")
+print("=" * 80)
+
+column_map = {}
+
+for disease, f in disease_files.items():
+
+    df = pd.read_csv(f)
+
+    cols = identify_columns(df)
+
+    column_map[disease] = cols
+
+    print("\n", disease)
+    print("-" * 40)
+
+    for key, value in cols.items():
+
+        print(
+            f"{key:10s}: {value}"
+        )
+
+
+# ============================================================
+# 9. STOP IF REQUIRED LFC CONFIDENCE LIMITS ARE MISSING
+# ============================================================
+
+for disease, cols in column_map.items():
+
+    required = [
+        "microbe",
+        "lfc5",
+        "lfc95"
+    ]
+
+    missing = [
+        x
+        for x in required
+        if cols[x] is None
+    ]
+
+    if missing:
+
+        raise ValueError(
+            f"\n{disease} is missing required columns: "
+            f"{missing}\n"
+            "We should NOT guess the ranking method."
+        )
+
+
+# ============================================================
+# 10. CREATE DIRECTIONAL TOP-100 SIGNATURES
+# ============================================================
+#
+# IMPORTANT:
+#
+# NO padj < 0.05 FILTER IS USED HERE.
+#
+# This is intentional.
+#
+# The reference method explicitly states that the directional
+# ranking is NOT limited to species passing an adjusted
+# p-value threshold.
+#
+# We therefore rank the full DESeq2 result according to the
+# LFC confidence limits.
+#
+# ============================================================
+
+
+TOP_N = 100
+
+top100_case = {}
+top100_control = {}
+
+validation_rows = []
+
+
+for disease, f in disease_files.items():
+
+    df = pd.read_csv(f)
+
+    cols = column_map[disease]
+
+    microbe_col = cols["microbe"]
+    lfc5_col = cols["lfc5"]
+    lfc95_col = cols["lfc95"]
+    basemean_col = cols["baseMean"]
+
+    work = df.copy()
+
+    # --------------------------------------------------------
+    # Rename to standardized names
+    # --------------------------------------------------------
+
+    work = work.rename(
+        columns={
+            microbe_col: "microbe",
+            lfc5_col: "LFC_5CI",
+            lfc95_col: "LFC_95CI"
+        }
+    )
+
+    if basemean_col is not None:
+
+        work = work.rename(
+            columns={
+                basemean_col: "baseMean"
+            }
+        )
+
+    else:
+
+        work["baseMean"] = np.nan
+
+
+    # --------------------------------------------------------
+    # Convert numerical columns
+    # --------------------------------------------------------
+
+    work["LFC_5CI"] = pd.to_numeric(
+        work["LFC_5CI"],
+        errors="coerce"
+    )
+
+    work["LFC_95CI"] = pd.to_numeric(
+        work["LFC_95CI"],
+        errors="coerce"
+    )
+
+    work["baseMean"] = pd.to_numeric(
+        work["baseMean"],
+        errors="coerce"
+    )
+
+
+    # --------------------------------------------------------
+    # Remove missing microbial names
+    # --------------------------------------------------------
+
+    work = work[
+        work["microbe"].notna()
+    ].copy()
+
+    work["microbe"] = (
+        work["microbe"]
+        .astype(str)
+        .str.strip()
+    )
+
+    work = work[
+        work["microbe"] != ""
+    ]
+
+
+    # --------------------------------------------------------
+    # Remove Homo sapiens / host
+    # --------------------------------------------------------
+
+    host_mask = (
+        work["microbe"]
+        .str.lower()
+        .str.contains(
+            r"homo sapiens|human",
+            regex=True,
+            na=False
+        )
+    )
+
+    host_removed = int(
+        host_mask.sum()
+    )
+
+    work = work[
+        ~host_mask
+    ].copy()
+
+
+    # --------------------------------------------------------
+    # Remove rows where baseMean = 0
+    # --------------------------------------------------------
+
+    zero_mask = (
+        work["baseMean"]
+        .fillna(0)
+        .eq(0)
+    )
+
+    zero_removed = int(
+        zero_mask.sum()
+    )
+
+    work = work[
+        ~zero_mask
+    ].copy()
+
+
+    # --------------------------------------------------------
+    # Remove rows lacking LFC confidence values
+    # --------------------------------------------------------
+
+    work = work[
+        work["LFC_5CI"].notna()
+        &
+        work["LFC_95CI"].notna()
+    ].copy()
+
+
+    # --------------------------------------------------------
+    # CASE-ASSOCIATED TOP 100
+    #
+    # Highest 5% LFC confidence limit
+    # --------------------------------------------------------
+
+    case = (
+        work
+        .sort_values(
+            "LFC_5CI",
+            ascending=False
+        )
+        .drop_duplicates(
+            subset="microbe"
+        )
+        .head(TOP_N)
+        .copy()
+    )
+
+    case["case_rank"] = np.arange(
+        1,
+        len(case) + 1
+    )
+
+    case["disease"] = disease
+
+
+    # --------------------------------------------------------
+    # CONTROL-ASSOCIATED TOP 100
+    #
+    # Lowest 95% LFC confidence limit
+    # --------------------------------------------------------
+
+    control = (
+        work
+        .sort_values(
+            "LFC_95CI",
+            ascending=True
+        )
+        .drop_duplicates(
+            subset="microbe"
+        )
+        .head(TOP_N)
+        .copy()
+    )
+
+    control["control_rank"] = np.arange(
+        1,
+        len(control) + 1
+    )
+
+    control["disease"] = disease
+
+
+    # --------------------------------------------------------
+    # SAVE
+    # --------------------------------------------------------
+
+    top100_case[disease] = case
+
+    top100_control[disease] = control
+
+
+    # --------------------------------------------------------
+    # VALIDATION
+    # --------------------------------------------------------
+
+    validation_rows.append({
+
+        "Disease": disease,
+
+        "Original_rows": len(df),
+
+        "Rows_after_cleaning": len(work),
+
+        "Case_Top100_n": len(case),
+
+        "Control_Top100_n": len(control),
+
+        "Host_rows_removed": host_removed,
+
+        "Zero_baseMean_rows_removed": zero_removed,
+
+        "Case_min_LFC_5CI":
+            case["LFC_5CI"].min()
+            if len(case) else np.nan,
+
+        "Case_max_LFC_5CI":
+            case["LFC_5CI"].max()
+            if len(case) else np.nan,
+
+        "Control_min_LFC_95CI":
+            control["LFC_95CI"].min()
+            if len(control) else np.nan,
+
+        "Control_max_LFC_95CI":
+            control["LFC_95CI"].max()
+            if len(control) else np.nan
+    })
+
+
+# ============================================================
+# 11. VALIDATION TABLE
+# ============================================================
+
+validation = pd.DataFrame(
+    validation_rows
+)
+
+print("\n" + "=" * 80)
+print("TOP-100 SIGNATURE VALIDATION")
+print("=" * 80)
+
+display(validation)
+
+
+# ============================================================
+# 12. CHECK TOP-100 SIZES
+# ============================================================
+
+for disease in disease_files:
+
+    if len(top100_case[disease]) < TOP_N:
+
+        print(
+            f"WARNING: {disease} has only "
+            f"{len(top100_case[disease])} case-associated taxa."
+        )
+
+    if len(top100_control[disease]) < TOP_N:
+
+        print(
+            f"WARNING: {disease} has only "
+            f"{len(top100_control[disease])} "
+            "control-associated taxa."
+        )
+
+
+# ============================================================
+# 13. CALCULATE ALL 45 PAIRWISE OVERLAPS
+# ============================================================
+#
+# For each disease pair:
+#
+# Case overlap =
+# intersection of their Top-100 case lists
+#
+# Control overlap =
+# intersection of their Top-100 control lists
+#
+# Total overlap =
+# case overlap + control overlap
+#
+# ============================================================
+
+diseases = sorted(
+    disease_files.keys()
+)
+
+pair_results = []
+
+
+for disease_1, disease_2 in itertools.combinations(
+    diseases,
+    2
+):
+
+    case_set_1 = set(
+        top100_case[disease_1]["microbe"]
+    )
+
+    case_set_2 = set(
+        top100_case[disease_2]["microbe"]
+    )
+
+    control_set_1 = set(
+        top100_control[disease_1]["microbe"]
+    )
+
+    control_set_2 = set(
+        top100_control[disease_2]["microbe"]
+    )
+
+
+    shared_case = (
+        case_set_1
+        &
+        case_set_2
+    )
+
+    shared_control = (
+        control_set_1
+        &
+        control_set_2
+    )
+
+
+    case_overlap = len(
+        shared_case
+    )
+
+    control_overlap = len(
+        shared_control
+    )
+
+    total_overlap = (
+        case_overlap
+        +
+        control_overlap
+    )
+
+
+    pair_results.append({
+
+        "Disease_1":
+            disease_1,
+
+        "Disease_2":
+            disease_2,
+
+        "Case_overlap":
+            case_overlap,
+
+        "Control_overlap":
+            control_overlap,
+
+        "Total_overlap":
+            total_overlap
+    })
+
+
+# ============================================================
+# 14. SORT ALL 45 PAIRS
+# ============================================================
+
+pair_results = pd.DataFrame(
+    pair_results
+)
+
+pair_results = (
+    pair_results
+    .sort_values(
+        [
+            "Total_overlap",
+            "Case_overlap",
+            "Control_overlap"
+        ],
+        ascending=False
+    )
+    .reset_index(drop=True)
+)
+
+pair_results.insert(
+    0,
+    "Rank",
+    np.arange(
+        1,
+        len(pair_results) + 1
+    )
+)
+
+
+# ============================================================
+# 15. DISPLAY ALL 45 PAIRS
+# ============================================================
+
+print("\n" + "=" * 80)
+print("ALL 45 DISEASE PAIRS — RANKED BY TOTAL OVERLAP")
+print("=" * 80)
+
+display(
+    pair_results
+)
+
+
+# ============================================================
+# 16. IDENTIFY THE STRONGEST PAIR
+# ============================================================
+
+strongest = pair_results.iloc[0]
+
+strongest_disease_1 = (
+    strongest["Disease_1"]
+)
+
+strongest_disease_2 = (
+    strongest["Disease_2"]
+)
+
+strongest_case = int(
+    strongest["Case_overlap"]
+)
+
+strongest_control = int(
+    strongest["Control_overlap"]
+)
+
+strongest_total = int(
+    strongest["Total_overlap"]
+)
+
+
+print("\n" + "=" * 80)
+print("STRONGEST DISEASE PAIR FROM YOUR NEW RESULTS")
+print("=" * 80)
+
+print(
+    "\nDisease 1:",
+    strongest_disease_1
+)
+
+print(
+    "Disease 2:",
+    strongest_disease_2
+)
+
+print(
+    "\nCase-associated overlap:",
+    strongest_case
+)
+
+print(
+    "Control-associated overlap:",
+    strongest_control
+)
+
+print(
+    "TOTAL OVERLAP:",
+    strongest_total
+)
+
+print(
+    "\nThis pair is selected ONLY because it has the "
+    "highest integrated Top-100 microbial overlap "
+    "among all 45 disease pairs."
+)
+
+
+# ============================================================
+# 17. ALSO SHOW TOP 3
+# ============================================================
+
+print("\n" + "=" * 80)
+print("TOP 3 STRONGEST PAIRS")
+print("=" * 80)
+
+display(
+    pair_results.head(3)
+)
+
+
+# ============================================================
+# 18. GET SHARED MICROBES FOR THE STRONGEST PAIR
+# ============================================================
+
+strongest_case_set = (
+    set(
+        top100_case[
+            strongest_disease_1
+        ]["microbe"]
+    )
+    &
+    set(
+        top100_case[
+            strongest_disease_2
+        ]["microbe"]
+    )
+)
+
+strongest_control_set = (
+    set(
+        top100_control[
+            strongest_disease_1
+        ]["microbe"]
+    )
+    &
+    set(
+        top100_control[
+            strongest_disease_2
+        ]["microbe"]
+    )
+)
+
+
+# ============================================================
+# 19. CREATE SHARED CASE TABLE WITH RANKS
+# ============================================================
+
+case_1 = (
+    top100_case[
+        strongest_disease_1
+    ][
+        [
+            "microbe",
+            "LFC_5CI",
+            "case_rank"
+        ]
+    ]
+    .rename(
+        columns={
+            "LFC_5CI":
+                f"LFC_5CI_{strongest_disease_1}",
+
+            "case_rank":
+                f"case_rank_{strongest_disease_1}"
+        }
+    )
+)
+
+case_2 = (
+    top100_case[
+        strongest_disease_2
+    ][
+        [
+            "microbe",
+            "LFC_5CI",
+            "case_rank"
+        ]
+    ]
+    .rename(
+        columns={
+            "LFC_5CI":
+                f"LFC_5CI_{strongest_disease_2}",
+
+            "case_rank":
+                f"case_rank_{strongest_disease_2}"
+        }
+    )
+)
+
+
+shared_case = pd.merge(
+    case_1,
+    case_2,
+    on="microbe",
+    how="inner"
+)
+
+shared_case = shared_case.sort_values(
+    [
+        f"case_rank_{strongest_disease_1}",
+        f"case_rank_{strongest_disease_2}"
+    ]
+)
+
+
+# ============================================================
+# 20. CREATE SHARED CONTROL TABLE WITH RANKS
+# ============================================================
+
+control_1 = (
+    top100_control[
+        strongest_disease_1
+    ][
+        [
+            "microbe",
+            "LFC_95CI",
+            "control_rank"
+        ]
+    ]
+    .rename(
+        columns={
+            "LFC_95CI":
+                f"LFC_95CI_{strongest_disease_1}",
+
+            "control_rank":
+                f"control_rank_{strongest_disease_1}"
+        }
+    )
+)
+
+control_2 = (
+    top100_control[
+        strongest_disease_2
+    ][
+        [
+            "microbe",
+            "LFC_95CI",
+            "control_rank"
+        ]
+    ]
+    .rename(
+        columns={
+            "LFC_95CI":
+                f"LFC_95CI_{strongest_disease_2}",
+
+            "control_rank":
+                f"control_rank_{strongest_disease_2}"
+        }
+    )
+)
+
+
+shared_control = pd.merge(
+    control_1,
+    control_2,
+    on="microbe",
+    how="inner"
+)
+
+shared_control = shared_control.sort_values(
+    [
+        f"control_rank_{strongest_disease_1}",
+        f"control_rank_{strongest_disease_2}"
+    ]
+)
+
+
+# ============================================================
+# 21. DISPLAY SHARED MICROBES
+# ============================================================
+
+print("\n" + "=" * 80)
+print("SHARED CASE-ASSOCIATED MICROBES")
+print("=" * 80)
+
+print(
+    "Number shared:",
+    len(shared_case)
+)
+
+display(
+    shared_case
+)
+
+
+print("\n" + "=" * 80)
+print("SHARED CONTROL-ASSOCIATED MICROBES")
+print("=" * 80)
+
+print(
+    "Number shared:",
+    len(shared_control)
+)
+
+display(
+    shared_control
+)
+
+
+# ============================================================
+# 22. SAVE THE NEW-RESULTS ANALYSIS
+# ============================================================
+
+OUTPUT_DIR = (
+    "/content/NEW_DISEASE_SIMILARITY_RESULTS"
+)
+
+os.makedirs(
+    OUTPUT_DIR,
+    exist_ok=True
+)
+
+
+# All pairwise results
+pair_results.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "NEW_All_45_Disease_Pairs_Ranked.csv"
+    ),
+    index=False
+)
+
+
+# Validation
+validation.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "NEW_Top100_Validation.csv"
+    ),
+    index=False
+)
+
+
+# Strongest pair case overlap
+shared_case.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "NEW_Strongest_Pair_Shared_Case.csv"
+    ),
+    index=False
+)
+
+
+# Strongest pair control overlap
+shared_control.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "NEW_Strongest_Pair_Shared_Control.csv"
+    ),
+    index=False
+)
+
+
+# Save Top100 signatures
+for disease in diseases:
+
+    top100_case[disease].to_csv(
+        os.path.join(
+            OUTPUT_DIR,
+            f"NEW_{disease}_Top100_Case.csv"
+        ),
+        index=False
+    )
+
+    top100_control[disease].to_csv(
+        os.path.join(
+            OUTPUT_DIR,
+            f"NEW_{disease}_Top100_Control.csv"
+        ),
+        index=False
+    )
+
+
+# ============================================================
+# 23. FINAL AUDIT SUMMARY
+# ============================================================
+
+print("\n" + "=" * 80)
+print("FINAL AUDIT SUMMARY")
+print("=" * 80)
+
+print(
+    "\nNumber of diseases:",
+    len(diseases)
+)
+
+print(
+    "Expected disease pairs:",
+    len(diseases) * (len(diseases) - 1) // 2
+)
+
+print(
+    "Calculated disease pairs:",
+    len(pair_results)
+)
+
+print(
+    "\nSTRONGEST PAIR:"
+)
+
+print(
+    f"{strongest_disease_1}  ×  "
+    f"{strongest_disease_2}"
+)
+
+print(
+    f"Case overlap   = {strongest_case}"
+)
+
+print(
+    f"Control overlap = {strongest_control}"
+)
+
+print(
+    f"Total overlap  = {strongest_total}"
+)
+
+print(
+    "\nResults saved in:"
+)
+
+print(
+    OUTPUT_DIR
+)
+
+print("\n" + "=" * 80)
+print("ANALYSIS COMPLETE")
+print("=" * 80)
+
+
+
+
+
+
+
+
+
+
+
+
+# ================================================================
+# FINAL NEW-RESULTS DISEASE SIMILARITY ANALYSIS
+# ================================================================
+#
+# PURPOSE:
+# Determine the STRONGEST disease pair using ONLY the NEW
+# corrected DESeq2 full-result files.
+#
+# IMPORTANT:
+# - Does NOT use previous thesis results
+# - Does NOT use previous Top-100 files
+# - Does NOT use previous overlap files
+# - Does NOT choose a disease pair manually
+# - Uses exactly the 10 corrected DESeq2 files
+# - Calculates confidence limits from log2FoldChange + lfcSE
+# - Compares all 45 disease pairs
+#
+# ================================================================
+
+import os
+import itertools
+import numpy as np
+import pandas as pd
+
+from IPython.display import display
+
+
+# ================================================================
+# STEP 1 — DEFINE THE EXACT NEW CORRECTED DESEQ2 FILES
+# ================================================================
+
+BASE_DIR = "/content/CORRECTED_DESEQ2_RESULTS"
+
+FILES = {
+    "Autism":
+        os.path.join(
+            BASE_DIR,
+            "Autism_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "COVID-19":
+        os.path.join(
+            BASE_DIR,
+            "COVID19_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "Colorectal neoplasm":
+        os.path.join(
+            BASE_DIR,
+            "Colorectal_Neoplasm_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "Dwarfism":
+        os.path.join(
+            BASE_DIR,
+            "Dwarfism_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "Fatigue":
+        os.path.join(
+            BASE_DIR,
+            "Fatigue_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "Fibromyalgia":
+        os.path.join(
+            BASE_DIR,
+            "Fibromyalgia_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "IBS":
+        os.path.join(
+            BASE_DIR,
+            "IBS_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "Neuroblastoma":
+        os.path.join(
+            BASE_DIR,
+            "Neuroblastoma_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "Obesity":
+        os.path.join(
+            BASE_DIR,
+            "Obesity_CORRECTED_full_DESeq2_results.csv"
+        ),
+
+    "Ulcerative colitis":
+        os.path.join(
+            BASE_DIR,
+            "Ulcerative_Colitis_CORRECTED_full_DESeq2_results.csv"
+        )
+}
+
+
+# ================================================================
+# STEP 2 — CHECK THAT ALL 10 FILES ACTUALLY EXIST
+# ================================================================
+
+print("=" * 80)
+print("CHECKING NEW CORRECTED DESEQ2 FILES")
+print("=" * 80)
+
+missing_files = []
+
+for disease, filepath in FILES.items():
+
+    if os.path.isfile(filepath):
+
+        print("FOUND :", disease)
+        print("        ", filepath)
+
+    else:
+
+        print("MISSING:", disease)
+        print("        ", filepath)
+
+        missing_files.append(filepath)
+
+
+if len(missing_files) > 0:
+
+    raise FileNotFoundError(
+        "\nThe following required DESeq2 files were not found:\n\n"
+        + "\n".join(missing_files)
+    )
+
+
+print("\nPASS: All 10 corrected DESeq2 files were found.")
+
+
+# ================================================================
+# STEP 3 — EXPECTED DESEQ2 COLUMNS
+# ================================================================
+
+REQUIRED_COLUMNS = [
+    "microbe",
+    "baseMean",
+    "log2FoldChange",
+    "lfcSE",
+    "stat",
+    "pvalue",
+    "padj"
+]
+
+
+# ================================================================
+# STEP 4 — READ AND VALIDATE ALL 10 FILES
+# ================================================================
+
+data = {}
+
+print("\n" + "=" * 80)
+print("READING AND VALIDATING DESEQ2 RESULTS")
+print("=" * 80)
+
+for disease, filepath in FILES.items():
+
+    df = pd.read_csv(filepath)
+
+    print("\n" + disease)
+    print("-" * 50)
+
+    print("Rows   :", len(df))
+    print("Columns:", list(df.columns))
+
+    missing_columns = [
+        col
+        for col in REQUIRED_COLUMNS
+        if col not in df.columns
+    ]
+
+    if missing_columns:
+
+        raise ValueError(
+            f"\n{disease} is missing these required columns:\n"
+            f"{missing_columns}"
+        )
+
+    # Keep only the required DESeq2 columns
+    df = df[REQUIRED_COLUMNS].copy()
+
+    # Convert numeric columns safely
+    numeric_columns = [
+        "baseMean",
+        "log2FoldChange",
+        "lfcSE",
+        "stat",
+        "pvalue",
+        "padj"
+    ]
+
+    for col in numeric_columns:
+
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
+
+    # Clean microbe names
+    df["microbe"] = (
+        df["microbe"]
+        .astype(str)
+        .str.strip()
+    )
+
+    # Remove blank / invalid microbe names
+    df = df[
+        df["microbe"].notna()
+        &
+        (df["microbe"] != "")
+        &
+        (df["microbe"].str.lower() != "nan")
+    ].copy()
+
+    # Remove rows where the values required for CI calculation
+    # are unavailable
+    df = df[
+        df["log2FoldChange"].notna()
+        &
+        df["lfcSE"].notna()
+    ].copy()
+
+    # Remove impossible negative standard errors
+    df = df[
+        df["lfcSE"] >= 0
+    ].copy()
+
+    # Remove duplicated microbial names
+    df = (
+        df
+        .drop_duplicates(
+            subset="microbe",
+            keep="first"
+        )
+        .reset_index(drop=True)
+    )
+
+    data[disease] = df
+
+    print("Valid rows:", len(df))
+
+    print(
+        "Duplicate microbes removed:",
+        len(pd.read_csv(filepath))
+        - len(
+            pd.read_csv(filepath)[["microbe"]]
+            .drop_duplicates()
+        )
+    )
+
+
+print("\nPASS: All 10 DESeq2 datasets validated.")
+
+
+# ================================================================
+# STEP 5 — CALCULATE THE 5% AND 95% CONFIDENCE LIMITS
+# ================================================================
+#
+# DESeq2 provides:
+#
+# log2FoldChange
+# lfcSE
+#
+# We calculate:
+#
+# Lower 5% confidence limit
+#     = log2FC - 1.645 × SE
+#
+# Upper 95% confidence limit
+#     = log2FC + 1.645 × SE
+#
+# These are the directional limits used for ranking.
+# ================================================================
+
+Z_VALUE = 1.645
+
+for disease in data:
+
+    df = data[disease].copy()
+
+    df["LFC_5CI"] = (
+        df["log2FoldChange"]
+        -
+        Z_VALUE * df["lfcSE"]
+    )
+
+    df["LFC_95CI"] = (
+        df["log2FoldChange"]
+        +
+        Z_VALUE * df["lfcSE"]
+    )
+
+    data[disease] = df
+
+
+print("\n" + "=" * 80)
+print("CONFIDENCE LIMITS CALCULATED")
+print("=" * 80)
+
+print(
+    "Lower 5% limit = log2FoldChange - 1.645 × lfcSE"
+)
+
+print(
+    "Upper 95% limit = log2FoldChange + 1.645 × lfcSE"
+)
+
+
+# ================================================================
+# STEP 6 — CREATE TOP 100 CASE-ASSOCIATED TAXA
+# ================================================================
+#
+# CASE-ASSOCIATED:
+# Highest values of the LOWER 5% confidence limit.
+#
+# ================================================================
+
+TOP_N = 100
+
+TOP_CASE = {}
+
+TOP_CONTROL = {}
+
+
+for disease, df in data.items():
+
+    case_df = (
+        df
+        .sort_values(
+            by="LFC_5CI",
+            ascending=False
+        )
+        .head(TOP_N)
+        .copy()
+        .reset_index(drop=True)
+    )
+
+    case_df["Case_Rank"] = (
+        np.arange(
+            1,
+            len(case_df) + 1
+        )
+    )
+
+    TOP_CASE[disease] = case_df
+
+
+# ================================================================
+# STEP 7 — CREATE TOP 100 CONTROL-ASSOCIATED TAXA
+# ================================================================
+#
+# CONTROL-ASSOCIATED:
+# Lowest values of the UPPER 95% confidence limit.
+#
+# ================================================================
+
+for disease, df in data.items():
+
+    control_df = (
+        df
+        .sort_values(
+            by="LFC_95CI",
+            ascending=True
+        )
+        .head(TOP_N)
+        .copy()
+        .reset_index(drop=True)
+    )
+
+    control_df["Control_Rank"] = (
+        np.arange(
+            1,
+            len(control_df) + 1
+        )
+    )
+
+    TOP_CONTROL[disease] = control_df
+
+
+# ================================================================
+# STEP 8 — CHECK THAT EACH DISEASE HAS 100 + 100 TAXA
+# ================================================================
+
+print("\n" + "=" * 80)
+print("TOP-100 SIGNATURE CHECK")
+print("=" * 80)
+
+signature_check = []
+
+for disease in FILES:
+
+    signature_check.append({
+
+        "Disease":
+            disease,
+
+        "DESeq2_rows":
+            len(data[disease]),
+
+        "Case_signature":
+            len(TOP_CASE[disease]),
+
+        "Control_signature":
+            len(TOP_CONTROL[disease])
+
+    })
+
+signature_check = pd.DataFrame(
+    signature_check
+)
+
+display(signature_check)
+
+
+# ================================================================
+# STEP 9 — CALCULATE ALL 45 DISEASE PAIRS
+# ================================================================
+#
+# For each pair:
+#
+# Case overlap:
+# shared Top-100 case-associated microbes
+#
+# Control overlap:
+# shared Top-100 control-associated microbes
+#
+# Total overlap:
+# case overlap + control overlap
+#
+# ================================================================
+
+diseases = list(FILES.keys())
+
+pair_results = []
+
+
+for disease_1, disease_2 in itertools.combinations(
+    diseases,
+    2
+):
+
+    case_set_1 = set(
+        TOP_CASE[disease_1]["microbe"]
+    )
+
+    case_set_2 = set(
+        TOP_CASE[disease_2]["microbe"]
+    )
+
+    control_set_1 = set(
+        TOP_CONTROL[disease_1]["microbe"]
+    )
+
+    control_set_2 = set(
+        TOP_CONTROL[disease_2]["microbe"]
+    )
+
+
+    shared_case = (
+        case_set_1
+        .intersection(case_set_2)
+    )
+
+    shared_control = (
+        control_set_1
+        .intersection(control_set_2)
+    )
+
+
+    case_overlap = len(
+        shared_case
+    )
+
+    control_overlap = len(
+        shared_control
+    )
+
+    total_overlap = (
+        case_overlap
+        +
+        control_overlap
+    )
+
+
+    pair_results.append({
+
+        "Disease_1":
+            disease_1,
+
+        "Disease_2":
+            disease_2,
+
+        "Case_overlap":
+            case_overlap,
+
+        "Control_overlap":
+            control_overlap,
+
+        "Total_overlap":
+            total_overlap
+
+    })
+
+
+# ================================================================
+# STEP 10 — SORT ALL 45 PAIRS
+# ================================================================
+
+pair_results = pd.DataFrame(
+    pair_results
+)
+
+pair_results = (
+    pair_results
+    .sort_values(
+        by=[
+            "Total_overlap",
+            "Case_overlap",
+            "Control_overlap"
+        ],
+        ascending=[
+            False,
+            False,
+            False
+        ]
+    )
+    .reset_index(drop=True)
+)
+
+pair_results.insert(
+    0,
+    "Similarity_Rank",
+    np.arange(
+        1,
+        len(pair_results) + 1
+    )
+)
+
+
+# ================================================================
+# STEP 11 — VERIFY 45 PAIRS
+# ================================================================
+
+expected_pairs = (
+    len(diseases)
+    *
+    (len(diseases) - 1)
+    //
+    2
+)
+
+actual_pairs = len(
+    pair_results
+)
+
+print("\n" + "=" * 80)
+print("PAIRWISE ANALYSIS CHECK")
+print("=" * 80)
+
+print(
+    "Number of diseases:",
+    len(diseases)
+)
+
+print(
+    "Expected pairs:",
+    expected_pairs
+)
+
+print(
+    "Calculated pairs:",
+    actual_pairs
+)
+
+if actual_pairs != expected_pairs:
+
+    raise ValueError(
+        "ERROR: The number of disease pairs is not 45."
+    )
+
+print("\nPASS: Exactly 45 disease pairs calculated.")
+
+
+# ================================================================
+# STEP 12 — SHOW ALL 45 PAIRS
+# ================================================================
+
+print("\n" + "=" * 80)
+print("ALL 45 DISEASE PAIRS — RANKED")
+print("=" * 80)
+
+display(
+    pair_results
+)
+
+
+# ================================================================
+# STEP 13 — IDENTIFY THE STRONGEST PAIR
+# ================================================================
+
+strongest = pair_results.iloc[0]
+
+D1 = strongest["Disease_1"]
+D2 = strongest["Disease_2"]
+
+CASE_OVERLAP = int(
+    strongest["Case_overlap"]
+)
+
+CONTROL_OVERLAP = int(
+    strongest["Control_overlap"]
+)
+
+TOTAL_OVERLAP = int(
+    strongest["Total_overlap"]
+)
+
+
+print("\n" + "=" * 80)
+print("★★★★★ STRONGEST DISEASE PAIR ★★★★★")
+print("=" * 80)
+
+print(
+    "\nDisease 1:",
+    D1
+)
+
+print(
+    "Disease 2:",
+    D2
+)
+
+print(
+    "\nCase-associated overlap:",
+    CASE_OVERLAP
+)
+
+print(
+    "Control-associated overlap:",
+    CONTROL_OVERLAP
+)
+
+print(
+    "TOTAL OVERLAP:",
+    TOTAL_OVERLAP
+)
+
+print(
+    "\nSimilarity rank:",
+    int(strongest["Similarity_Rank"])
+)
+
+print("\nThis pair was selected automatically from the NEW results.")
+
+
+# ================================================================
+# STEP 14 — SHOW TOP 10
+# ================================================================
+
+print("\n" + "=" * 80)
+print("TOP 10 STRONGEST DISEASE PAIRS")
+print("=" * 80)
+
+display(
+    pair_results.head(10)
+)
+
+
+# ================================================================
+# STEP 15 — EXTRACT SHARED CASE-ASSOCIATED MICROBES
+# ================================================================
+
+case1 = TOP_CASE[D1][
+    [
+        "microbe",
+        "log2FoldChange",
+        "lfcSE",
+        "LFC_5CI",
+        "Case_Rank"
+    ]
+].copy()
+
+case2 = TOP_CASE[D2][
+    [
+        "microbe",
+        "log2FoldChange",
+        "lfcSE",
+        "LFC_5CI",
+        "Case_Rank"
+    ]
+].copy()
+
+
+case1.columns = [
+    "microbe",
+    f"log2FC_{D1}",
+    f"lfcSE_{D1}",
+    f"LFC_5CI_{D1}",
+    f"Rank_{D1}"
+]
+
+case2.columns = [
+    "microbe",
+    f"log2FC_{D2}",
+    f"lfcSE_{D2}",
+    f"LFC_5CI_{D2}",
+    f"Rank_{D2}"
+]
+
+
+SHARED_CASE = pd.merge(
+    case1,
+    case2,
+    on="microbe",
+    how="inner"
+)
+
+
+SHARED_CASE = (
+    SHARED_CASE
+    .sort_values(
+        by=[
+            f"Rank_{D1}",
+            f"Rank_{D2}"
+        ]
+    )
+    .reset_index(drop=True)
+)
+
+
+# ================================================================
+# STEP 16 — EXTRACT SHARED CONTROL-ASSOCIATED MICROBES
+# ================================================================
+
+control1 = TOP_CONTROL[D1][
+    [
+        "microbe",
+        "log2FoldChange",
+        "lfcSE",
+        "LFC_95CI",
+        "Control_Rank"
+    ]
+].copy()
+
+control2 = TOP_CONTROL[D2][
+    [
+        "microbe",
+        "log2FoldChange",
+        "lfcSE",
+        "LFC_95CI",
+        "Control_Rank"
+    ]
+].copy()
+
+
+control1.columns = [
+    "microbe",
+    f"log2FC_{D1}",
+    f"lfcSE_{D1}",
+    f"LFC_95CI_{D1}",
+    f"Rank_{D1}"
+]
+
+control2.columns = [
+    "microbe",
+    f"log2FC_{D2}",
+    f"lfcSE_{D2}",
+    f"LFC_95CI_{D2}",
+    f"Rank_{D2}"
+]
+
+
+SHARED_CONTROL = pd.merge(
+    control1,
+    control2,
+    on="microbe",
+    how="inner"
+)
+
+
+SHARED_CONTROL = (
+    SHARED_CONTROL
+    .sort_values(
+        by=[
+            f"Rank_{D1}",
+            f"Rank_{D2}"
+        ]
+    )
+    .reset_index(drop=True)
+)
+
+
+# ================================================================
+# STEP 17 — DISPLAY SHARED MICROBES
+# ================================================================
+
+print("\n" + "=" * 80)
+print(
+    f"SHARED CASE-ASSOCIATED MICROBES: {D1} × {D2}"
+)
+print("=" * 80)
+
+print(
+    "Number:",
+    len(SHARED_CASE)
+)
+
+display(
+    SHARED_CASE
+)
+
+
+print("\n" + "=" * 80)
+print(
+    f"SHARED CONTROL-ASSOCIATED MICROBES: {D1} × {D2}"
+)
+print("=" * 80)
+
+print(
+    "Number:",
+    len(SHARED_CONTROL)
+)
+
+display(
+    SHARED_CONTROL
+)
+
+
+# ================================================================
+# STEP 18 — SAVE EVERYTHING
+# ================================================================
+
+OUTPUT_DIR = (
+    "/content/NEW_RESULTS_STRONGEST_PAIR_ANALYSIS"
+)
+
+os.makedirs(
+    OUTPUT_DIR,
+    exist_ok=True
+)
+
+
+# 45-pair ranking
+pair_results.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "NEW_ALL_45_DISEASE_PAIRS_RANKED.csv"
+    ),
+    index=False
+)
+
+
+# Validation
+signature_check.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "NEW_TOP100_SIGNATURE_CHECK.csv"
+    ),
+    index=False
+)
+
+
+# Strongest pair shared case taxa
+SHARED_CASE.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "STRONGEST_PAIR_SHARED_CASE_ASSOCIATED.csv"
+    ),
+    index=False
+)
+
+
+# Strongest pair shared control taxa
+SHARED_CONTROL.to_csv(
+    os.path.join(
+        OUTPUT_DIR,
+        "STRONGEST_PAIR_SHARED_CONTROL_ASSOCIATED.csv"
+    ),
+    index=False
+)
+
+
+# Save each disease's Top-100 case/control lists
+for disease in diseases:
+
+    safe_name = (
+        disease
+        .replace(" ", "_")
+        .replace("-", "")
+    )
+
+    TOP_CASE[disease].to_csv(
+        os.path.join(
+            OUTPUT_DIR,
+            f"{safe_name}_TOP100_CASE_ASSOCIATED.csv"
+        ),
+        index=False
+    )
+
+    TOP_CONTROL[disease].to_csv(
+        os.path.join(
+            OUTPUT_DIR,
+            f"{safe_name}_TOP100_CONTROL_ASSOCIATED.csv"
+        ),
+        index=False
+    )
+
+
+# ================================================================
+# STEP 19 — FINAL QC
+# ================================================================
+
+print("\n" + "=" * 80)
+print("FINAL QC")
+print("=" * 80)
+
+print(
+    "\n10 diseases:",
+    len(diseases)
+)
+
+print(
+    "45 disease pairs:",
+    len(pair_results)
+)
+
+print(
+    "Strongest pair:",
+    D1,
+    "×",
+    D2
+)
+
+print(
+    "Case overlap:",
+    CASE_OVERLAP
+)
+
+print(
+    "Control overlap:",
+    CONTROL_OVERLAP
+)
+
+print(
+    "Total overlap:",
+    TOTAL_OVERLAP
+)
+
+print(
+    "\nOutput folder:"
+)
+
+print(
+    OUTPUT_DIR
+)
+
+print("\n" + "=" * 80)
+print("DONE — NEW RESULTS ONLY")
+print("=" * 80)
 
 
 
