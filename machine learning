@@ -1,396 +1,3710 @@
-#load files
-import pandas as pd
+# ================================================================
+# FINAL CORRECTED RF vs GB ML ANALYSIS
+# ================================================================
+# Corrected abundance matrices:
+#   Homo sapiens removed from all 10 diseases
+#
+# Workflow:
+#   corrected abundance
+#       -> metadata validation
+#       -> 80:20 stratified hold-out
+#       -> training-only SelectKBest (k=30)
+#       -> RF + GB
+#       -> hold-out/Test AUC
+#       -> 5-fold CV AUC
+#       -> RF vs GB comparison
+#
+# NO SHAP
+# NO DESeq2 integration
+# ================================================================
+
+import os
+import zipfile
 import numpy as np
+import pandas as pd
 
-abundance = pd.read_csv(
-    "Colorectal_Neoplasm_transpose.tabular",
-    sep="\t"
+from sklearn.model_selection import (
+    train_test_split,
+    StratifiedKFold,
+    cross_val_score
 )
-
-labels = pd.read_excel(
-    "Colorectal_Neoplasm_metadata.xlsx"
-)
-#verify the files
-print("Abundance shape:", abundance.shape)
-print("Labels shape:", labels.shape)
-
-print("\nAbundance columns:")
-print(abundance.columns[:5])
-
-print("\nLabels columns:")
-print(labels.columns)
-#clean run ids
-abundance["name"] = (
-    abundance["name"]
-    .astype(str)
-    .str.replace(r"\s+", "", regex=True)
-)
-
-labels["run id"] = (
-    labels["run id"]
-    .astype(str)
-    .str.replace(r"\s+", "", regex=True)
-)
-
-#merge
-merged = abundance.merge(
-    labels,
-    left_on="name",
-    right_on="run id",
-    how="inner"
-)
-
-print("Merged shape:", merged.shape)
-#create x and y
-# Feature matrix
-X = merged.drop(columns=["name", "run id", "label"])
-
-# Labels
-y = merged["label"]
-
-# Clean labels (prevents hidden-space issue)
-y = y.astype(str).str.strip().astype(int)
-
-print("X shape:", X.shape)
-print("y shape:", y.shape)
-
-print("\nClass counts:")
-print(y.value_counts())
-
-#train/test split
-from sklearn.model_selection import train_test_split
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.20,
-    random_state=42,
-    stratify=y
-)
-
-print("Training:", X_train.shape)
-print("Testing :", X_test.shape)
-
-#feature selection
+from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectKBest, f_classif
-ra
-selector = SelectKBest(
-    score_func=f_classif,
-    k=30
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import roc_auc_score, accuracy_score
+
+
+# ================================================================
+# 1. CORRECTED ABUNDANCE FILES
+# ================================================================
+
+ABUNDANCE_FILES = {
+    "Autism":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Autism_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Colorectal_Neoplasm":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Colorectal_Neoplasm_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "COVID19":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/COVID19_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Dwarfism":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Dwarfism_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Fatigue":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Fatigue_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Fibromyalgia":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Fibromyalgia_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "IBS":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/IBS_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Neuroblastoma":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Neuroblastoma_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Obesity":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Obesity_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Ulcerative_Colitis":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Ulcerative_Colitis_CORRECTED_MICROBIAL_ABUNDANCE.tabular"
+}
+
+
+# ================================================================
+# 2. METADATA FILES
+# ================================================================
+
+METADATA_FILES = {
+    "Autism":
+        "/content/autism spectrum phenotype.xlsx",
+
+    "Colorectal_Neoplasm":
+        "/content/colorectal neoplasm phenotype.xlsx",
+
+    "COVID19":
+        "/content/covid phenotype.xlsx",
+
+    "Dwarfism":
+        "/content/dwarfism phenotype.xlsx",
+
+    "Fatigue":
+        "/content/fatigue syndrome phenotype.xlsx",
+
+    "Fibromyalgia":
+        "/content/fibromyalgia phenotype.xlsx",
+
+    "IBS":
+        "/content/ibs phenotype.txt.xlsx",
+
+    "Neuroblastoma":
+        "/content/neuroblastoma phenotype.xlsx",
+
+    "Obesity":
+        "/content/obesity phenotype.xlsx",
+
+    "Ulcerative_Colitis":
+        "/content/ulcerative colitis phenotype.xlsx"
+}
+
+
+# ================================================================
+# 3. OUTPUT
+# ================================================================
+
+OUTDIR = (
+    "/content/"
+    "CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE"
 )
 
-X_train_selected = selector.fit_transform(
-    X_train,
-    y_train
+os.makedirs(OUTDIR, exist_ok=True)
+
+
+# ================================================================
+# 4. LABEL CLEANING
+# ================================================================
+
+def clean_binary_label(value):
+
+    if pd.isna(value):
+        return None
+
+    text = str(value)
+
+    # Remove ordinary + Unicode whitespace
+    text = "".join(
+        ch for ch in text
+        if not ch.isspace()
+    )
+
+    # Remove invisible Unicode characters
+    for char in [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060"
+    ]:
+        text = text.replace(char, "")
+
+    if text == "0":
+        return 0
+
+    if text == "1":
+        return 1
+
+    try:
+        number = float(text)
+
+        if number == 0:
+            return 0
+
+        if number == 1:
+            return 1
+
+    except:
+        pass
+
+    return None
+
+
+# ================================================================
+# 5. VERIFY FILES
+# ================================================================
+
+print("=" * 100)
+print("VERIFYING CORRECTED ABUNDANCE + METADATA")
+print("=" * 100)
+
+for disease in ABUNDANCE_FILES:
+
+    if not os.path.exists(
+        ABUNDANCE_FILES[disease]
+    ):
+        raise FileNotFoundError(
+            f"{disease}: corrected abundance missing:\n"
+            f"{ABUNDANCE_FILES[disease]}"
+        )
+
+    if not os.path.exists(
+        METADATA_FILES[disease]
+    ):
+        raise FileNotFoundError(
+            f"{disease}: metadata missing:\n"
+            f"{METADATA_FILES[disease]}"
+        )
+
+    print(
+        f"{disease:25s} VERIFIED"
+    )
+
+
+# ================================================================
+# 6. STORAGE
+# ================================================================
+
+results = []
+cv_records = []
+
+
+# ================================================================
+# 7. RUN ALL 10 DISEASES
+# ================================================================
+
+for disease in ABUNDANCE_FILES:
+
+    print("\n")
+    print("=" * 100)
+    print(disease.upper())
+    print("=" * 100)
+
+    # ------------------------------------------------------------
+    # LOAD ABUNDANCE
+    # ------------------------------------------------------------
+
+    abundance = pd.read_csv(
+        ABUNDANCE_FILES[disease],
+        sep="\t",
+        dtype=object
+    )
+
+    if "name" not in abundance.columns:
+        raise ValueError(
+            f"{disease}: 'name' column missing."
+        )
+
+    abundance["name"] = (
+        abundance["name"]
+        .astype(str)
+        .str.strip()
+    )
+
+    # ------------------------------------------------------------
+    # 20 samples
+    # ------------------------------------------------------------
+
+    if len(abundance) != 20:
+        raise ValueError(
+            f"{disease}: expected 20 samples; "
+            f"found {len(abundance)}."
+        )
+
+    if abundance["name"].duplicated().any():
+        raise ValueError(
+            f"{disease}: duplicate sample IDs."
+        )
+
+    # ------------------------------------------------------------
+    # HOST MUST ALREADY BE REMOVED
+    # ------------------------------------------------------------
+
+    if "Homo sapiens" in abundance.columns:
+        raise ValueError(
+            f"{disease}: Homo sapiens is still present."
+        )
+
+    species = [
+        c for c in abundance.columns
+        if c != "name"
+    ]
+
+    if len(species) < 30:
+        raise ValueError(
+            f"{disease}: fewer than 30 taxa."
+        )
+
+    # ------------------------------------------------------------
+    # NUMERIC
+    # ------------------------------------------------------------
+
+    abundance[species] = (
+        abundance[species]
+        .apply(pd.to_numeric, errors="coerce")
+    )
+
+    if abundance[species].isna().any().any():
+        raise ValueError(
+            f"{disease}: non-numeric abundance values."
+        )
+
+    # ------------------------------------------------------------
+    # LOAD METADATA
+    # ------------------------------------------------------------
+
+    metadata = pd.read_excel(
+        METADATA_FILES[disease],
+        dtype=object
+    )
+
+    if "run id" not in metadata.columns:
+        raise ValueError(
+            f"{disease}: 'run id' missing."
+        )
+
+    if "label" not in metadata.columns:
+        raise ValueError(
+            f"{disease}: 'label' missing."
+        )
+
+    metadata["run id"] = (
+        metadata["run id"]
+        .astype(str)
+        .str.strip()
+    )
+
+    metadata["label"] = (
+        metadata["label"]
+        .apply(clean_binary_label)
+    )
+
+    if metadata["label"].isna().any():
+        raise ValueError(
+            f"{disease}: invalid labels after cleaning."
+        )
+
+    metadata["label"] = (
+        metadata["label"]
+        .astype(int)
+    )
+
+    if len(metadata) != 20:
+        raise ValueError(
+            f"{disease}: metadata does not contain 20 samples."
+        )
+
+    # ------------------------------------------------------------
+    # EXACTLY 10 / 10
+    # ------------------------------------------------------------
+
+    if (metadata["label"] == 0).sum() != 10:
+        raise ValueError(
+            f"{disease}: Healthy count is not 10."
+        )
+
+    if (metadata["label"] == 1).sum() != 10:
+        raise ValueError(
+            f"{disease}: Disease count is not 10."
+        )
+
+    # ------------------------------------------------------------
+    # EXACT SAMPLE MATCH
+    # ------------------------------------------------------------
+
+    abundance_ids = set(
+        abundance["name"]
+    )
+
+    metadata_ids = set(
+        metadata["run id"]
+    )
+
+    if abundance_ids != metadata_ids:
+
+        raise ValueError(
+            f"{disease}: abundance/metadata sample mismatch.\n"
+            f"Missing from abundance: "
+            f"{metadata_ids - abundance_ids}\n"
+            f"Missing from metadata: "
+            f"{abundance_ids - metadata_ids}"
+        )
+
+    # ------------------------------------------------------------
+    # ALIGN ABUNDANCE TO METADATA
+    # ------------------------------------------------------------
+
+    abundance = (
+        abundance
+        .set_index("name")
+        .loc[metadata["run id"]]
+    )
+
+    X = abundance[species].copy()
+
+    y = (
+        metadata["label"]
+        .reset_index(drop=True)
+    )
+
+    print("Samples:", len(X))
+    print("Corrected non-zero species:", len(species))
+    print("Healthy:", int((y == 0).sum()))
+    print("Disease:", int((y == 1).sum()))
+
+    # ============================================================
+    # HOLD-OUT COHORT
+    # ============================================================
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.20,
+        stratify=y,
+        random_state=42
+    )
+
+    if len(X_train) != 16 or len(X_test) != 4:
+        raise ValueError(
+            f"{disease}: incorrect hold-out sizes."
+        )
+
+    print("Training samples:", len(X_train))
+    print("Testing samples:", len(X_test))
+
+    # ============================================================
+    # MODELS
+    # ============================================================
+
+    models = {
+
+        "Random Forest":
+            RandomForestClassifier(
+                random_state=42
+            ),
+
+        "Gradient Boosting":
+            GradientBoostingClassifier(
+                random_state=42
+            )
+    }
+
+    # ============================================================
+    # 5-FOLD CV
+    #
+    # SelectKBest is INSIDE pipeline:
+    # feature selection occurs independently inside each fold.
+    # ============================================================
+
+    cv = StratifiedKFold(
+        n_splits=5,
+        shuffle=True,
+        random_state=42
+    )
+
+    for model_name, model in models.items():
+
+        pipeline = Pipeline([
+            (
+                "selector",
+                SelectKBest(
+                    score_func=f_classif,
+                    k=30
+                )
+            ),
+            (
+                "model",
+                model
+            )
+        ])
+
+        cv_scores = cross_val_score(
+            pipeline,
+            X_train,
+            y_train,
+            cv=cv,
+            scoring="roc_auc",
+            n_jobs=-1
+        )
+
+        cv_auc = float(
+            np.mean(cv_scores)
+        )
+
+        cv_sd = float(
+            np.std(cv_scores, ddof=1)
+        )
+
+        for fold, score in enumerate(
+            cv_scores,
+            start=1
+        ):
+
+            cv_records.append({
+                "Disease": disease,
+                "Model": model_name,
+                "Fold": fold,
+                "CV_AUC": score
+            })
+
+        # ========================================================
+        # FINAL TRAINING-ONLY FEATURE SELECTION
+        # ========================================================
+
+        selector = SelectKBest(
+            score_func=f_classif,
+            k=30
+        )
+
+        X_train_selected = (
+            selector.fit_transform(
+                X_train,
+                y_train
+            )
+        )
+
+        X_test_selected = (
+            selector.transform(
+                X_test
+            )
+        )
+
+        selected_features = (
+            X.columns[
+                selector.get_support()
+            ]
+            .tolist()
+        )
+
+        if len(selected_features) != 30:
+            raise ValueError(
+                f"{disease}/{model_name}: "
+                "feature selection did not return 30."
+            )
+
+        # --------------------------------------------------------
+        # FIT
+        # --------------------------------------------------------
+
+        model.fit(
+            X_train_selected,
+            y_train
+        )
+
+        # --------------------------------------------------------
+        # HOLD-OUT PREDICTIONS
+        # --------------------------------------------------------
+
+        test_probability = (
+            model.predict_proba(
+                X_test_selected
+            )[:, 1]
+        )
+
+        test_prediction = (
+            model.predict(
+                X_test_selected
+            )
+        )
+
+        # --------------------------------------------------------
+        # TEST AUC
+        # --------------------------------------------------------
+
+        test_auc = roc_auc_score(
+            y_test,
+            test_probability
+        )
+
+        # --------------------------------------------------------
+        # ACCURACY
+        # --------------------------------------------------------
+
+        test_accuracy = accuracy_score(
+            y_test,
+            test_prediction
+        )
+
+        print(
+            f"{model_name:20s} | "
+            f"Test AUC = {test_auc:.3f} | "
+            f"CV AUC = {cv_auc:.3f} | "
+            f"Accuracy = {test_accuracy:.3f}"
+        )
+
+        # --------------------------------------------------------
+        # STORE
+        # --------------------------------------------------------
+
+        results.append({
+
+            "Disease": disease,
+            "Model": model_name,
+            "Full_species": len(species),
+            "Selected_features": 30,
+            "Training_samples": 16,
+            "Testing_samples": 4,
+            "Test_AUC": test_auc,
+            "CV_AUC": cv_auc,
+            "CV_AUC_SD": cv_sd,
+            "Test_Accuracy": test_accuracy
+        })
+
+        # --------------------------------------------------------
+        # SAVE SELECTED FEATURES
+        # --------------------------------------------------------
+
+        model_dir = os.path.join(
+            OUTDIR,
+            disease,
+            model_name.replace(" ", "_")
+        )
+
+        os.makedirs(
+            model_dir,
+            exist_ok=True
+        )
+
+        pd.DataFrame({
+            "Rank": np.arange(1, 31),
+            "microbe": selected_features
+        }).to_csv(
+            os.path.join(
+                model_dir,
+                "SELECTED_30_FEATURES.csv"
+            ),
+            index=False
+        )
+
+        # --------------------------------------------------------
+        # SAVE EXACT HOLD-OUT COHORT
+        # --------------------------------------------------------
+
+        holdout = pd.DataFrame({
+
+            "run_id":
+                X_test.index,
+
+            "label":
+                y_test.values,
+
+            "condition":
+                np.where(
+                    y_test.values == 1,
+                    "Disease",
+                    "Healthy"
+                ),
+
+            "probability":
+                test_probability,
+
+            "prediction":
+                test_prediction
+        })
+
+        holdout.to_csv(
+            os.path.join(
+                model_dir,
+                "HOLDOUT_TEST_COHORT.csv"
+            ),
+            index=False
+        )
+
+
+# ================================================================
+# 8. MASTER PERFORMANCE
+# ================================================================
+
+performance = pd.DataFrame(results)
+
+performance_file = os.path.join(
+    OUTDIR,
+    "CORRECTED_ALL_DISEASES_RF_GB_PERFORMANCE.csv"
 )
 
-X_test_selected = selector.transform(
-    X_test
-)
-
-selected_features = X.columns[
-    selector.get_support()
-]
-
-print("Selected Features Shape:")
-print(X_train_selected.shape)
-
-print("\nSelected Features:")
-print(selected_features.tolist())
-
-#Save Selected Features (Output 1)
-selected_df = pd.DataFrame({
-    "Selected_Microbe": selected_features
-})
-
-selected_df.to_excel(
-    "Colorectal_Neoplasm_Selected_Features.xlsx",
+performance.to_csv(
+    performance_file,
     index=False
 )
-Download
-from google.colab import files
 
-files.download(
-    "Colorectal_Neoplasm_Selected_Features.xlsx"
-)
-#Train Both Models
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import GradientBoostingClassifier
 
-rf = RandomForestClassifier(
-    random_state=42
-)
+# ================================================================
+# 9. CV FOLD RESULTS
+# ================================================================
 
-gb = GradientBoostingClassifier(
-    random_state=42
+cv_df = pd.DataFrame(cv_records)
+
+cv_file = os.path.join(
+    OUTDIR,
+    "CORRECTED_5FOLD_CV_RESULTS.csv"
 )
 
-rf.fit(
-    X_train_selected,
-    y_train
+cv_df.to_csv(
+    cv_file,
+    index=False
 )
 
-gb.fit(
-    X_train_selected,
-    y_train
+
+# ================================================================
+# 10. RF vs GB DISEASE COMPARISON
+# ================================================================
+
+cv_pivot = performance.pivot(
+    index="Disease",
+    columns="Model",
+    values="CV_AUC"
 )
 
-#Test Set Prediction
-rf_probs = rf.predict_proba(
-    X_test_selected
-)[:,1]
-
-gb_probs = gb.predict_proba(
-    X_test_selected
-)[:,1]
-
-#Test AUC
-from sklearn.metrics import roc_auc_score
-
-rf_auc = roc_auc_score(
-    y_test,
-    rf_probs
+test_pivot = performance.pivot(
+    index="Disease",
+    columns="Model",
+    values="Test_AUC"
 )
 
-gb_auc = roc_auc_score(
-    y_test,
-    gb_probs
+
+def winner(a, b):
+
+    if np.isclose(a, b):
+        return "Tie"
+
+    return (
+        "Random Forest"
+        if a > b
+        else
+        "Gradient Boosting"
+    )
+
+
+comparison = pd.DataFrame({
+    "Disease": cv_pivot.index,
+
+    "CV_AUC_RF":
+        cv_pivot["Random Forest"].values,
+
+    "CV_AUC_GB":
+        cv_pivot["Gradient Boosting"].values,
+
+    "Test_AUC_RF":
+        test_pivot["Random Forest"].values,
+
+    "Test_AUC_GB":
+        test_pivot["Gradient Boosting"].values
+})
+
+
+comparison["CV_winner"] = [
+    winner(r, g)
+    for r, g in zip(
+        comparison["CV_AUC_RF"],
+        comparison["CV_AUC_GB"]
+    )
+]
+
+comparison["Test_AUC_winner"] = [
+    winner(r, g)
+    for r, g in zip(
+        comparison["Test_AUC_RF"],
+        comparison["Test_AUC_GB"]
+    )
+]
+
+
+comparison_file = os.path.join(
+    OUTDIR,
+    "CORRECTED_RF_VS_GB_DISEASE_COMPARISON.csv"
 )
 
-print("Random Forest Test AUC :", rf_auc)
-print("Gradient Boosting Test AUC :", gb_auc)
-
-#5-fold Cross Validation
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import cross_val_score
-from sklearn.pipeline import Pipeline
-
-cv = StratifiedKFold(
-    n_splits=5,
-    shuffle=True,
-    random_state=42
+comparison.to_csv(
+    comparison_file,
+    index=False
 )
 
-rf_pipeline = Pipeline([
-    ("selector", SelectKBest(f_classif, k=30)),
-    ("rf", RandomForestClassifier(random_state=42))
-    ])
 
-gb_pipeline = Pipeline([
-    ("selector", SelectKBest(f_classif, k=30)),
-    ("gb", GradientBoostingClassifier(random_state=42))
-])
+# ================================================================
+# 11. OVERALL COMPARISON
+# ================================================================
 
-rf_scores = cross_val_score(
-    rf_pipeline,
-    X,
-    y,
-    cv=cv,
-    scoring="roc_auc"
-)
+rf = performance[
+    performance["Model"] == "Random Forest"
+]
 
-gb_scores = cross_val_score(
-    gb_pipeline,
-    X,
-    y,
-    cv=cv,
-    scoring="roc_auc"
-)
+gb = performance[
+    performance["Model"] == "Gradient Boosting"
+]
 
-print("RF CV AUC :", rf_scores.mean())
-print("GB CV AUC :", gb_scores.mean())
+overall = pd.DataFrame({
 
-#ROC Comparison Figure
-from sklearn.metrics import roc_curve, auc
-import matplotlib.pyplot as plt
-
-rf_fpr, rf_tpr, _ = roc_curve(y_test, rf_probs)
-gb_fpr, gb_tpr, _ = roc_curve(y_test, gb_probs)
-
-rf_auc_plot = auc(rf_fpr, rf_tpr)
-gb_auc_plot = auc(gb_fpr, gb_tpr)
-
-plt.figure(figsize=(7,6))
-
-plt.plot(rf_fpr, rf_tpr,
-         linewidth=2,
-         label=f"Random Forest (AUC = {rf_auc_plot:.2f})")
-
-plt.plot(gb_fpr, gb_tpr,
-         linewidth=2,
-         label=f"Gradient Boosting (AUC = {gb_auc_plot:.2f})")
-
-plt.plot([0,1],[0,1],'k--')
-
-plt.xlabel("False Positive Rate")
-plt.ylabel("True Positive Rate")
-plt.title("Colorectal Neoplasm ROC Curve")
-plt.legend(loc="lower right")
-
-plt.savefig(
-    "Colorectal_Neoplasm_ROC_Comparison.png",
-    dpi=600,
-    bbox_inches="tight"
-)
-
-plt.show()
-
-#Model Performance Table
-performance = pd.DataFrame({
-    "Model":[
+    "Model": [
         "Random Forest",
         "Gradient Boosting"
     ],
-    "Test_AUC":[
-        rf_auc,
-        gb_auc
+
+    "Mean_CV_AUC": [
+        rf["CV_AUC"].mean(),
+        gb["CV_AUC"].mean()
     ],
-    "CV_AUC":[
-        rf_scores.mean(),
-        gb_scores.mean()
+
+    "Median_CV_AUC": [
+        rf["CV_AUC"].median(),
+        gb["CV_AUC"].median()
+    ],
+
+    "Mean_Test_AUC": [
+        rf["Test_AUC"].mean(),
+        gb["Test_AUC"].mean()
+    ],
+
+    "Median_Test_AUC": [
+        rf["Test_AUC"].median(),
+        gb["Test_AUC"].median()
+    ],
+
+    "CV_wins": [
+        (
+            comparison["CV_winner"]
+            == "Random Forest"
+        ).sum(),
+
+        (
+            comparison["CV_winner"]
+            == "Gradient Boosting"
+        ).sum()
+    ],
+
+    "Test_AUC_wins": [
+        (
+            comparison["Test_AUC_winner"]
+            == "Random Forest"
+        ).sum(),
+
+        (
+            comparison["Test_AUC_winner"]
+            == "Gradient Boosting"
+        ).sum()
+    ],
+
+    "Test_AUC_ties": [
+        (
+            comparison["Test_AUC_winner"]
+            == "Tie"
+        ).sum(),
+
+        (
+            comparison["Test_AUC_winner"]
+            == "Tie"
+        ).sum()
     ]
 })
 
-performance.to_excel(
-    "Colorectal_Neoplasm_Model_Performance.xlsx",
+
+overall_file = os.path.join(
+    OUTDIR,
+    "CORRECTED_RF_VS_GB_OVERALL_COMPARISON.csv"
+)
+
+overall.to_csv(
+    overall_file,
     index=False
 )
 
-#Confusion Matrix
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
-rf_pred = rf.predict(X_test_selected)
+# ================================================================
+# 12. SANITY CHECKS
+# ================================================================
 
-cm = confusion_matrix(y_test, rf_pred)
+assert len(performance) == 20
+assert len(comparison) == 10
+assert len(overall) == 2
 
-disp = ConfusionMatrixDisplay(
-    confusion_matrix=cm,
-    display_labels=["Healthy","Colorectal Neoplasm"]
+assert (
+    performance["Training_samples"] == 16
+).all()
+
+assert (
+    performance["Testing_samples"] == 4
+).all()
+
+assert (
+    performance["Selected_features"] == 30
+).all()
+
+assert performance["Test_AUC"].between(0, 1).all()
+assert performance["CV_AUC"].between(0, 1).all()
+
+
+# ================================================================
+# 13. ZIP EVERYTHING
+# ================================================================
+
+ZIP_FILE = (
+    "/content/"
+    "CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE.zip"
 )
 
-disp.plot(cmap="Blues", values_format="d")
+with zipfile.ZipFile(
+    ZIP_FILE,
+    "w",
+    zipfile.ZIP_DEFLATED
+) as z:
 
-plt.title("Colorectal Neoplasm RF Confusion Matrix")
+    for root, dirs, files in os.walk(OUTDIR):
 
-plt.savefig(
-    "Colorectal_Neoplasm_RF_Confusion_Matrix.png",
-    dpi=600,
-    bbox_inches="tight"
+        for file in files:
+
+            full_path = os.path.join(
+                root,
+                file
+            )
+
+            relative_path = os.path.relpath(
+                full_path,
+                OUTDIR
+            )
+
+            z.write(
+                full_path,
+                arcname=relative_path
+            )
+
+
+# ================================================================
+# 14. FINAL OUTPUT
+# ================================================================
+
+print("\n")
+print("=" * 110)
+print("CORRECTED RF vs GB ANALYSIS COMPLETED")
+print("=" * 110)
+
+print("\nDISEASE-LEVEL PERFORMANCE:")
+print(
+    performance[
+        [
+            "Disease",
+            "Model",
+            "Test_AUC",
+            "CV_AUC",
+            "CV_AUC_SD",
+            "Test_Accuracy"
+        ]
+    ].to_string(index=False)
 )
 
-plt.show()
+print("\n")
+print("=" * 110)
+print("RF vs GB COMPARISON")
+print("=" * 110)
 
-#classification report
-from sklearn.metrics import classification_report
-
-report = classification_report(
-    y_test,
-    rf_pred,
-    output_dict=True
-)
-
-report_df = pd.DataFrame(report).transpose()
-
-report_df.to_excel(
-    "Colorectal_Neoplasm_RF_Classification_Report.xlsx"
-)
-
-#SHAP
-import shap
-
-explainer = shap.TreeExplainer(rf)
-
-shap_values = explainer(X_test_selected)
-
-shap_values_crc = shap.Explanation(
-    values=shap_values.values[:, :, 1],
-    base_values=shap_values.base_values[:, 1],
-    data=shap_values.data,
-    feature_names=selected_features
+print(
+    comparison.to_string(index=False)
 )
 
 
-#SHAP summary plot
-import matplotlib.pyplot as plt
 
-plt.figure(figsize=(10,8))
+# ================================================================
+# REFERENCE-ALIGNED ML QUALIFICATION — CORRECTED RESULTS
+# ================================================================
+#
+# PURPOSE:
+# Apply the reference article's AUC > 0.6 criterion to the
+# corrected classifier results.
+#
+# IMPORTANT:
+#   CV_AUC is used for the qualification criterion because it
+#   represents repeated training/validation performance.
+#
+#   Test_AUC is the independent 20% HOLD-OUT cohort and is kept
+#   separately as validation evidence.
+#
+#   We DO NOT use Test_AUC to create an additional arbitrary
+#   qualification threshold.
+#
+#   We DO NOT select RF or GB yet.
+#
+# ================================================================
 
-shap.plots.beeswarm(
-    shap_values_crc,
-    max_display=20,
-    show=False
+import os
+import numpy as np
+import pandas as pd
+
+
+# ================================================================
+# 1. INPUT
+# ================================================================
+
+INPUT_FILE = (
+    "/content/"
+    "CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE/"
+    "CORRECTED_ALL_DISEASES_RF_GB_PERFORMANCE.csv"
 )
 
-plt.savefig(
-    "Colorectal_Neoplasm_SHAP_Summary.png",
-    dpi=600,
-    bbox_inches="tight"
+OUTDIR = (
+    "/content/"
+    "CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE"
 )
 
-plt.show()
-#Download:
-from google.colab import files
+os.makedirs(OUTDIR, exist_ok=True)
 
-files.download("Colorectal_Neoplasm_SHAP_Summary.png")
 
-#SHAP bar plot
-plt.figure(figsize=(10,8))
+# ================================================================
+# 2. LOAD
+# ================================================================
 
-shap.plots.bar(
-    shap_values_crc,
-    max_display=20,
-    show=False
+if not os.path.exists(INPUT_FILE):
+
+    raise FileNotFoundError(
+        f"Corrected ML performance file not found:\n"
+        f"{INPUT_FILE}"
+    )
+
+df = pd.read_csv(INPUT_FILE)
+
+
+required_columns = [
+    "Disease",
+    "Model",
+    "Test_AUC",
+    "CV_AUC",
+    "Test_Accuracy"
+]
+
+missing = [
+    c for c in required_columns
+    if c not in df.columns
+]
+
+if missing:
+
+    raise ValueError(
+        f"Missing required columns:\n{missing}"
+    )
+
+
+# ================================================================
+# 3. BASIC VALIDATION
+# ================================================================
+
+if len(df) != 20:
+
+    raise ValueError(
+        f"Expected 20 rows = 10 diseases × 2 models. "
+        f"Found {len(df)}."
+    )
+
+if df["Disease"].nunique() != 10:
+
+    raise ValueError(
+        "Expected exactly 10 diseases."
+    )
+
+if df["Model"].nunique() != 2:
+
+    raise ValueError(
+        "Expected exactly two classifiers."
+    )
+
+expected_models = {
+    "Random Forest",
+    "Gradient Boosting"
+}
+
+if set(df["Model"]) != expected_models:
+
+    raise ValueError(
+        f"Unexpected models found: {set(df['Model'])}"
+    )
+
+
+# ================================================================
+# 4. REFERENCE ARTICLE QUALIFICATION
+# ================================================================
+#
+# Reference criterion:
+#
+#       AUC > 0.6
+#
+# We apply this to CV_AUC.
+#
+# IMPORTANT:
+# AUC exactly 0.600 does NOT qualify because the criterion is > 0.6.
+#
+# ================================================================
+
+THRESHOLD = 0.60
+
+df["CV_AUC_Qualified"] = (
+    df["CV_AUC"] > THRESHOLD
 )
 
-plt.savefig(
-    "Colorectal_Neoplasm_SHAP_Bar.png",
-    dpi=600,
-    bbox_inches="tight"
+
+# ================================================================
+# 5. HOLD-OUT PERFORMANCE IS KEPT SEPARATELY
+# ================================================================
+#
+# We do NOT invent a second threshold.
+#
+# Instead, we label whether the hold-out AUC is:
+#
+#   > 0.5  = better than chance
+#   = 0.5  = chance
+#   < 0.5  = below chance
+#
+# This is descriptive validation only.
+# ================================================================
+
+df["Holdout_AUC_Interpretation"] = np.select(
+
+    [
+        df["Test_AUC"] > 0.5,
+        np.isclose(
+            df["Test_AUC"],
+            0.5
+        ),
+        df["Test_AUC"] < 0.5
+    ],
+
+    [
+        "Above chance",
+        "Chance",
+        "Below chance"
+    ],
+
+    default="Unknown"
 )
 
-plt.show()
-#Download:
-files.download("Colorectal_Neoplasm_SHAP_Bar.png")
 
-#SHAP Values Table
+# ================================================================
+# 6. DISEASE × MODEL TABLE
+# ================================================================
+
+disease_model_file = os.path.join(
+    OUTDIR,
+    "REFERENCE_ALIGNED_CORRECTED_MODEL_QUALIFICATION.csv"
+)
+
+df.to_csv(
+    disease_model_file,
+    index=False
+)
+
+
+# ================================================================
+# 7. DISEASE-LEVEL QUALIFICATION
+# ================================================================
+#
+# A disease qualifies for downstream analysis if AT LEAST ONE
+# classifier achieves CV AUC > 0.6.
+#
+# This follows the reference-style disease filtering logic without
+# forcing a classifier choice prematurely.
+# ================================================================
+
+disease_summary = (
+    df
+    .groupby("Disease")
+    .agg(
+        RF_CV_AUC=(
+            "CV_AUC",
+            lambda x: x[
+                df.loc[
+                    x.index,
+                    "Model"
+                ] == "Random Forest"
+            ].iloc[0]
+        ),
+
+        GB_CV_AUC=(
+            "CV_AUC",
+            lambda x: x[
+                df.loc[
+                    x.index,
+                    "Model"
+                ] == "Gradient Boosting"
+            ].iloc[0]
+        ),
+
+        RF_Test_AUC=(
+            "Test_AUC",
+            lambda x: x[
+                df.loc[
+                    x.index,
+                    "Model"
+                ] == "Random Forest"
+            ].iloc[0]
+        ),
+
+        GB_Test_AUC=(
+            "Test_AUC",
+            lambda x: x[
+                df.loc[
+                    x.index,
+                    "Model"
+                ] == "Gradient Boosting"
+            ].iloc[0]
+        )
+    )
+    .reset_index()
+)
+
+
+# ================================================================
+# 8. QUALIFICATION FLAGS
+# ================================================================
+
+disease_summary["RF_CV_Qualified"] = (
+    disease_summary["RF_CV_AUC"]
+    > THRESHOLD
+)
+
+disease_summary["GB_CV_Qualified"] = (
+    disease_summary["GB_CV_AUC"]
+    > THRESHOLD
+)
+
+disease_summary["Disease_Qualified"] = (
+    disease_summary["RF_CV_Qualified"]
+    |
+    disease_summary["GB_CV_Qualified"]
+)
+
+
+# ================================================================
+# 9. WHICH CLASSIFIER QUALIFIES EACH DISEASE?
+# ================================================================
+
+def classifier_status(row):
+
+    rf = row["RF_CV_Qualified"]
+    gb = row["GB_CV_Qualified"]
+
+    if rf and gb:
+        return "Both"
+
+    if rf:
+        return "Random Forest"
+
+    if gb:
+        return "Gradient Boosting"
+
+    return "Neither"
+
+
+disease_summary["Qualified_Classifier"] = (
+    disease_summary.apply(
+        classifier_status,
+        axis=1
+    )
+)
+
+
+# ================================================================
+# 10. HOLD-OUT AUC SIDE-BY-SIDE
+# ================================================================
+
+disease_summary["RF_Holdout_Above_Chance"] = (
+    disease_summary["RF_Test_AUC"] > 0.5
+)
+
+disease_summary["GB_Holdout_Above_Chance"] = (
+    disease_summary["GB_Test_AUC"] > 0.5
+)
+
+
+# ================================================================
+# 11. SAVE DISEASE QUALIFICATION TABLE
+# ================================================================
+
+disease_file = os.path.join(
+    OUTDIR,
+    "REFERENCE_ALIGNED_CORRECTED_DISEASE_QUALIFICATION.csv"
+)
+
+disease_summary.to_csv(
+    disease_file,
+    index=False
+)
+
+
+# ================================================================
+# 12. CLASSIFIER-LEVEL SUMMARY
+# ================================================================
+#
+# This is descriptive.
+#
+# We compare:
+#   - mean CV AUC
+#   - median CV AUC
+#   - number of diseases with CV AUC > 0.6
+#   - mean hold-out AUC
+#
+# No arbitrary "winner" is imposed here.
+# ================================================================
+
+classifier_summary = []
+
+for model in [
+    "Random Forest",
+    "Gradient Boosting"
+]:
+
+    sub = df[
+        df["Model"] == model
+    ].copy()
+
+    classifier_summary.append({
+
+        "Model":
+            model,
+
+        "Mean_CV_AUC":
+            sub["CV_AUC"].mean(),
+
+        "Median_CV_AUC":
+            sub["CV_AUC"].median(),
+
+        "Diseases_CV_AUC_gt_0.6":
+            int(
+                (
+                    sub["CV_AUC"] > THRESHOLD
+                ).sum()
+            ),
+
+        "Diseases_CV_AUC_eq_or_below_0.6":
+            int(
+                (
+                    sub["CV_AUC"] <= THRESHOLD
+                ).sum()
+            ),
+
+        "Mean_Holdout_AUC":
+            sub["Test_AUC"].mean(),
+
+        "Median_Holdout_AUC":
+            sub["Test_AUC"].median(),
+
+        "Holdout_AUC_above_chance":
+            int(
+                (
+                    sub["Test_AUC"] > 0.5
+                ).sum()
+            )
+
+    })
+
+
+classifier_summary = pd.DataFrame(
+    classifier_summary
+)
+
+
+classifier_file = os.path.join(
+    OUTDIR,
+    "REFERENCE_ALIGNED_CORRECTED_CLASSIFIER_SUMMARY.csv"
+)
+
+classifier_summary.to_csv(
+    classifier_file,
+    index=False
+)
+
+
+# ================================================================
+# 13. FINAL LIST OF QUALIFIED DISEASES
+# ================================================================
+
+qualified = disease_summary[
+    disease_summary["Disease_Qualified"]
+].copy()
+
+excluded = disease_summary[
+    ~disease_summary["Disease_Qualified"]
+].copy()
+
+
+qualified_file = os.path.join(
+    OUTDIR,
+    "REFERENCE_ALIGNED_CORRECTED_QUALIFIED_DISEASES.csv"
+)
+
+excluded_file = os.path.join(
+    OUTDIR,
+    "REFERENCE_ALIGNED_CORRECTED_EXCLUDED_DISEASES.csv"
+)
+
+qualified.to_csv(
+    qualified_file,
+    index=False
+)
+
+excluded.to_csv(
+    excluded_file,
+    index=False
+)
+
+
+# ================================================================
+# 14. PRINT RESULTS
+# ================================================================
+
+print("\n")
+print("=" * 110)
+print("REFERENCE-ALIGNED CORRECTED ML QUALIFICATION")
+print("=" * 110)
+
+print(
+    f"\nQualification criterion: CV AUC > {THRESHOLD}"
+)
+
+print(
+    "\nDISEASE-LEVEL RESULTS:"
+)
+
+print(
+    disease_summary[
+        [
+            "Disease",
+            "RF_CV_AUC",
+            "GB_CV_AUC",
+            "RF_Test_AUC",
+            "GB_Test_AUC",
+            "RF_CV_Qualified",
+            "GB_CV_Qualified",
+            "Disease_Qualified",
+            "Qualified_Classifier"
+        ]
+    ].to_string(index=False)
+)
+
+
+print("\n")
+print("=" * 110)
+print("CLASSIFIER-LEVEL SUMMARY")
+print("=" * 110)
+
+print(
+    classifier_summary.to_string(index=False)
+)
+
+
+print("\n")
+print("=" * 110)
+print("QUALIFIED DISEASES")
+print("=" * 110)
+
+print(
+    qualified[
+        [
+            "Disease",
+            "RF_CV_AUC",
+            "GB_CV_AUC",
+            "RF_Test_AUC",
+            "GB_Test_AUC",
+            "Qualified_Classifier"
+        ]
+    ].to_string(index=False)
+)
+
+
+print("\n")
+print("=" * 110)
+print("EXCLUDED DISEASES")
+print("=" * 110)
+
+print(
+    excluded[
+        [
+            "Disease",
+            "RF_CV_AUC",
+            "GB_CV_AUC",
+            "RF_Test_AUC",
+            "GB_Test_AUC"
+        ]
+    ].to_string(index=False)
+)
+
+
+print("\n")
+print("=" * 110)
+print("SAVED FILES")
+print("=" * 110)
+
+print(disease_model_file)
+print(disease_file)
+print(classifier_file)
+print(qualified_file)
+print(excluded_file)
+
+
+# ================================================================
+# 15. SAFETY CHECKS
+# ================================================================
+
+assert (
+    disease_summary["Disease"].nunique()
+    == 10
+)
+
+assert (
+    len(qualified)
+    +
+    len(excluded)
+    ==
+    10
+)
+
+assert (
+    disease_summary["Disease_Qualified"]
+    .sum()
+    ==
+    len(qualified)
+)
+
+print("\n")
+print("QUALIFICATION ANALYSIS COMPLETED.")
+print("DO NOT GENERATE SHAP YET.")
+print("DO NOT SELECT RF/GB FROM THIS CELL ALONE.")
+
+
+
+import os
+import pandas as pd
 import numpy as np
 
-mean_shap = np.abs(shap_values_crc.values).mean(axis=0)
+from scipy.stats import wilcoxon
 
-shap_table = pd.DataFrame({
-    "Microbe": selected_features,
-    "Mean_SHAP": mean_shap
-})
+# ============================================================
+# FORMAL RF vs GB MODEL COMPARISON
+# ============================================================
 
-shap_table = shap_table.sort_values(
-    by="Mean_SHAP",
-    ascending=False
-).reset_index(drop=True)
+INPUT = (
+    "/content/CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE/"
+    "CORRECTED_ALL_DISEASES_RF_GB_PERFORMANCE.csv"
+)
 
-shap_table.head(20)
-Save:
-shap_table.to_excel(
-    "Colorectal_Neoplasm_SHAP_Values.xlsx",
+OUTDIR = (
+    "/content/CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE"
+)
+
+os.makedirs(OUTDIR, exist_ok=True)
+
+df = pd.read_csv(INPUT)
+
+# ------------------------------------------------------------
+# Validate
+# ------------------------------------------------------------
+
+required = [
+    "Disease",
+    "Model",
+    "CV_AUC",
+    "Test_AUC"
+]
+
+missing = [x for x in required if x not in df.columns]
+
+if missing:
+    raise ValueError(f"Missing columns: {missing}")
+
+rf = (
+    df[df["Model"] == "Random Forest"]
+    [["Disease", "CV_AUC", "Test_AUC"]]
+    .rename(columns={
+        "CV_AUC": "RF_CV_AUC",
+        "Test_AUC": "RF_Test_AUC"
+    })
+)
+
+gb = (
+    df[df["Model"] == "Gradient Boosting"]
+    [["Disease", "CV_AUC", "Test_AUC"]]
+    .rename(columns={
+        "CV_AUC": "GB_CV_AUC",
+        "Test_AUC": "GB_Test_AUC"
+    })
+)
+
+comparison = pd.merge(
+    rf,
+    gb,
+    on="Disease",
+    how="inner"
+)
+
+if len(comparison) != 10:
+    raise ValueError(
+        f"Expected 10 paired diseases, found {len(comparison)}."
+    )
+
+# ------------------------------------------------------------
+# Paired differences
+# Positive = RF better
+# Negative = GB better
+# ------------------------------------------------------------
+
+comparison["CV_difference_RF_minus_GB"] = (
+    comparison["RF_CV_AUC"]
+    - comparison["GB_CV_AUC"]
+)
+
+comparison["Test_difference_RF_minus_GB"] = (
+    comparison["RF_Test_AUC"]
+    - comparison["GB_Test_AUC"]
+)
+
+# ------------------------------------------------------------
+# Disease-level CV winner
+# ------------------------------------------------------------
+
+def cv_winner(row):
+
+    if row["RF_CV_AUC"] > row["GB_CV_AUC"]:
+        return "Random Forest"
+
+    elif row["GB_CV_AUC"] > row["RF_CV_AUC"]:
+        return "Gradient Boosting"
+
+    else:
+        return "Tie"
+
+
+comparison["CV_winner"] = comparison.apply(
+    cv_winner,
+    axis=1
+)
+
+# ------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------
+
+rf_mean = comparison["RF_CV_AUC"].mean()
+gb_mean = comparison["GB_CV_AUC"].mean()
+
+rf_median = comparison["RF_CV_AUC"].median()
+gb_median = comparison["GB_CV_AUC"].median()
+
+mean_difference = (
+    rf_mean - gb_mean
+)
+
+median_difference = (
+    rf_median - gb_median
+)
+
+rf_wins = (
+    comparison["CV_winner"]
+    == "Random Forest"
+).sum()
+
+gb_wins = (
+    comparison["CV_winner"]
+    == "Gradient Boosting"
+).sum()
+
+ties = (
+    comparison["CV_winner"]
+    == "Tie"
+).sum()
+
+# ------------------------------------------------------------
+# Paired Wilcoxon test
+#
+# This asks whether the paired disease-level CV-AUC
+# differences systematically favor one classifier.
+# ------------------------------------------------------------
+
+differences = comparison[
+    "CV_difference_RF_minus_GB"
+].values
+
+if np.allclose(differences, 0):
+
+    wilcoxon_stat = 0.0
+    wilcoxon_p = 1.0
+
+else:
+
+    result = wilcoxon(
+        differences,
+        alternative="two-sided",
+        zero_method="wilcox"
+    )
+
+    wilcoxon_stat = result.statistic
+    wilcoxon_p = result.pvalue
+
+# ------------------------------------------------------------
+# Decision
+#
+# IMPORTANT:
+# We do NOT use the 4-sample hold-out to override CV.
+#
+# If paired comparison is not significant, classify as
+# "No clear overall winner".
+# ------------------------------------------------------------
+
+if wilcoxon_p < 0.05:
+
+    if mean_difference > 0:
+        final_decision = "Random Forest"
+    else:
+        final_decision = "Gradient Boosting"
+
+else:
+
+    final_decision = "No clear overall winner"
+
+# ------------------------------------------------------------
+# Save disease-level comparison
+# ------------------------------------------------------------
+
+comparison_file = os.path.join(
+    OUTDIR,
+    "FORMAL_RF_GB_PAIRED_CV_COMPARISON.csv"
+)
+
+comparison.to_csv(
+    comparison_file,
     index=False
 )
 
-files.download(
-    "Colorectal_Neoplasm_SHAP_Values.xlsx"
+# ------------------------------------------------------------
+# Save summary
+# ------------------------------------------------------------
 
-#Top 20 Biomarkers
-top20 = shap_table.head(20)
+summary = pd.DataFrame([{
 
-top20.to_excel(
-    "Colorectal_Neoplasm_Top20_Biomarkers.xlsx",
+    "RF_mean_CV_AUC":
+        rf_mean,
+
+    "GB_mean_CV_AUC":
+        gb_mean,
+
+    "RF_median_CV_AUC":
+        rf_median,
+
+    "GB_median_CV_AUC":
+        gb_median,
+
+    "RF_minus_GB_mean_CV_difference":
+        mean_difference,
+
+    "RF_minus_GB_median_CV_difference":
+        median_difference,
+
+    "RF_CV_wins":
+        rf_wins,
+
+    "GB_CV_wins":
+        gb_wins,
+
+    "CV_ties":
+        ties,
+
+    "Wilcoxon_statistic":
+        wilcoxon_stat,
+
+    "Wilcoxon_p_value":
+        wilcoxon_p,
+
+    "Final_model_decision":
+        final_decision
+
+}])
+
+summary_file = os.path.join(
+    OUTDIR,
+    "FORMAL_RF_GB_MODEL_SELECTION_SUMMARY.csv"
+)
+
+summary.to_csv(
+    summary_file,
     index=False
 )
 
-files.download(
-    "Colorectal_Neoplasm_Top20_Biomarkers.xlsx"
+# ------------------------------------------------------------
+# Print
+# ------------------------------------------------------------
+
+print("=" * 90)
+print("FORMAL RF vs GB MODEL COMPARISON")
+print("=" * 90)
+
+print("\nDisease-level CV comparison:")
+print(
+    comparison[
+        [
+            "Disease",
+            "RF_CV_AUC",
+            "GB_CV_AUC",
+            "CV_difference_RF_minus_GB",
+            "CV_winner"
+        ]
+    ].to_string(index=False)
+)
+
+print("\nMean CV-AUC:")
+print(f"RF = {rf_mean:.4f}")
+print(f"GB = {gb_mean:.4f}")
+
+print("\nMedian CV-AUC:")
+print(f"RF = {rf_median:.4f}")
+print(f"GB = {gb_median:.4f}")
+
+print("\nCV wins:")
+print(f"RF = {rf_wins}")
+print(f"GB = {gb_wins}")
+print(f"Ties = {ties}")
+
+print("\nPaired Wilcoxon test:")
+print(f"Statistic = {wilcoxon_stat:.4f}")
+print(f"P-value = {wilcoxon_p:.6f}")
+
+print("\nFINAL MODEL DECISION:")
+print(final_decision)
+
+print("\nSaved:")
+print(comparison_file)
+print(summary_file)
+
+print("\nDO NOT GENERATE SHAP YET.")
+
+
+
+
+import os
+import pandas as pd
+import numpy as np
+
+from scipy.stats import wilcoxon
+
+# ============================================================
+# FORMAL RF vs GB MODEL COMPARISON
+# ============================================================
+
+INPUT = (
+    "/content/CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE/"
+    "CORRECTED_ALL_DISEASES_RF_GB_PERFORMANCE.csv"
+)
+
+OUTDIR = (
+    "/content/CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE"
+)
+
+os.makedirs(OUTDIR, exist_ok=True)
+
+df = pd.read_csv(INPUT)
+
+# ------------------------------------------------------------
+# Validate
+# ------------------------------------------------------------
+
+required = [
+    "Disease",
+    "Model",
+    "CV_AUC",
+    "Test_AUC"
+]
+
+missing = [x for x in required if x not in df.columns]
+
+if missing:
+    raise ValueError(f"Missing columns: {missing}")
+
+rf = (
+    df[df["Model"] == "Random Forest"]
+    [["Disease", "CV_AUC", "Test_AUC"]]
+    .rename(columns={
+        "CV_AUC": "RF_CV_AUC",
+        "Test_AUC": "RF_Test_AUC"
+    })
+)
+
+gb = (
+    df[df["Model"] == "Gradient Boosting"]
+    [["Disease", "CV_AUC", "Test_AUC"]]
+    .rename(columns={
+        "CV_AUC": "GB_CV_AUC",
+        "Test_AUC": "GB_Test_AUC"
+    })
+)
+
+comparison = pd.merge(
+    rf,
+    gb,
+    on="Disease",
+    how="inner"
+)
+
+if len(comparison) != 10:
+    raise ValueError(
+        f"Expected 10 paired diseases, found {len(comparison)}."
+    )
+
+# ------------------------------------------------------------
+# Paired differences
+# Positive = RF better
+# Negative = GB better
+# ------------------------------------------------------------
+
+comparison["CV_difference_RF_minus_GB"] = (
+    comparison["RF_CV_AUC"]
+    - comparison["GB_CV_AUC"]
+)
+
+comparison["Test_difference_RF_minus_GB"] = (
+    comparison["RF_Test_AUC"]
+    - comparison["GB_Test_AUC"]
+)
+
+# ------------------------------------------------------------
+# Disease-level CV winner
+# ------------------------------------------------------------
+
+def cv_winner(row):
+
+    if row["RF_CV_AUC"] > row["GB_CV_AUC"]:
+        return "Random Forest"
+
+    elif row["GB_CV_AUC"] > row["RF_CV_AUC"]:
+        return "Gradient Boosting"
+
+    else:
+        return "Tie"
+
+
+comparison["CV_winner"] = comparison.apply(
+    cv_winner,
+    axis=1
+)
+
+# ------------------------------------------------------------
+# Summary
+# ------------------------------------------------------------
+
+rf_mean = comparison["RF_CV_AUC"].mean()
+gb_mean = comparison["GB_CV_AUC"].mean()
+
+rf_median = comparison["RF_CV_AUC"].median()
+gb_median = comparison["GB_CV_AUC"].median()
+
+mean_difference = (
+    rf_mean - gb_mean
+)
+
+median_difference = (
+    rf_median - gb_median
+)
+
+rf_wins = (
+    comparison["CV_winner"]
+    == "Random Forest"
+).sum()
+
+gb_wins = (
+    comparison["CV_winner"]
+    == "Gradient Boosting"
+).sum()
+
+ties = (
+    comparison["CV_winner"]
+    == "Tie"
+).sum()
+
+# ------------------------------------------------------------
+# Paired Wilcoxon test
+#
+# This asks whether the paired disease-level CV-AUC
+# differences systematically favor one classifier.
+# ------------------------------------------------------------
+
+differences = comparison[
+    "CV_difference_RF_minus_GB"
+].values
+
+if np.allclose(differences, 0):
+
+    wilcoxon_stat = 0.0
+    wilcoxon_p = 1.0
+
+else:
+
+    result = wilcoxon(
+        differences,
+        alternative="two-sided",
+        zero_method="wilcox"
+    )
+
+    wilcoxon_stat = result.statistic
+    wilcoxon_p = result.pvalue
+
+# ------------------------------------------------------------
+# Decision
+#
+# IMPORTANT:
+# We do NOT use the 4-sample hold-out to override CV.
+#
+# If paired comparison is not significant, classify as
+# "No clear overall winner".
+# ------------------------------------------------------------
+
+if wilcoxon_p < 0.05:
+
+    if mean_difference > 0:
+        final_decision = "Random Forest"
+    else:
+        final_decision = "Gradient Boosting"
+
+else:
+
+    final_decision = "No clear overall winner"
+
+# ------------------------------------------------------------
+# Save disease-level comparison
+# ------------------------------------------------------------
+
+comparison_file = os.path.join(
+    OUTDIR,
+    "FORMAL_RF_GB_PAIRED_CV_COMPARISON.csv"
+)
+
+comparison.to_csv(
+    comparison_file,
+    index=False
+)
+
+# ------------------------------------------------------------
+# Save summary
+# ------------------------------------------------------------
+
+summary = pd.DataFrame([{
+
+    "RF_mean_CV_AUC":
+        rf_mean,
+
+    "GB_mean_CV_AUC":
+        gb_mean,
+
+    "RF_median_CV_AUC":
+        rf_median,
+
+    "GB_median_CV_AUC":
+        gb_median,
+
+    "RF_minus_GB_mean_CV_difference":
+        mean_difference,
+
+    "RF_minus_GB_median_CV_difference":
+        median_difference,
+
+    "RF_CV_wins":
+        rf_wins,
+
+    "GB_CV_wins":
+        gb_wins,
+
+    "CV_ties":
+        ties,
+
+    "Wilcoxon_statistic":
+        wilcoxon_stat,
+
+    "Wilcoxon_p_value":
+        wilcoxon_p,
+
+    "Final_model_decision":
+        final_decision
+
+}])
+
+summary_file = os.path.join(
+    OUTDIR,
+    "FORMAL_RF_GB_MODEL_SELECTION_SUMMARY.csv"
+)
+
+summary.to_csv(
+    summary_file,
+    index=False
+)
+
+# ------------------------------------------------------------
+# Print
+# ------------------------------------------------------------
+
+print("=" * 90)
+print("FORMAL RF vs GB MODEL COMPARISON")
+print("=" * 90)
+
+print("\nDisease-level CV comparison:")
+print(
+    comparison[
+        [
+            "Disease",
+            "RF_CV_AUC",
+            "GB_CV_AUC",
+            "CV_difference_RF_minus_GB",
+            "CV_winner"
+        ]
+    ].to_string(index=False)
+)
+
+print("\nMean CV-AUC:")
+print(f"RF = {rf_mean:.4f}")
+print(f"GB = {gb_mean:.4f}")
+
+print("\nMedian CV-AUC:")
+print(f"RF = {rf_median:.4f}")
+print(f"GB = {gb_median:.4f}")
+
+print("\nCV wins:")
+print(f"RF = {rf_wins}")
+print(f"GB = {gb_wins}")
+print(f"Ties = {ties}")
+
+print("\nPaired Wilcoxon test:")
+print(f"Statistic = {wilcoxon_stat:.4f}")
+print(f"P-value = {wilcoxon_p:.6f}")
+
+print("\nFINAL MODEL DECISION:")
+print(final_decision)
+
+print("\nSaved:")
+print(comparison_file)
+print(summary_file)
+
+print("\nDO NOT GENERATE SHAP YET.")
+
+
+
+
+import os
+import pandas as pd
+
+INPUT = (
+    "/content/CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE/"
+    "CORRECTED_ALL_DISEASES_RF_GB_PERFORMANCE.csv"
+)
+
+OUTDIR = (
+    "/content/CORRECTED_REFERENCE_ALIGNED_ML_PERFORMANCE"
+)
+
+THRESHOLD = 0.60
+
+df = pd.read_csv(INPUT)
+
+rf = df[
+    df["Model"] == "Random Forest"
+].copy()
+
+if len(rf) != 10:
+    raise ValueError(
+        f"Expected 10 Random Forest results, found {len(rf)}."
+    )
+
+# Reference criterion: AUC > 0.6
+rf["RF_SHAP_QUALIFIED"] = (
+    rf["CV_AUC"] > THRESHOLD
+)
+
+qualified = rf[
+    rf["RF_SHAP_QUALIFIED"]
+].copy()
+
+excluded = rf[
+    ~rf["RF_SHAP_QUALIFIED"]
+].copy()
+
+# ---------------------------------------------------------------
+# Save detailed tables
+# ---------------------------------------------------------------
+
+qualified_file = os.path.join(
+    OUTDIR,
+    "FINAL_RF_SHAP_QUALIFIED_DISEASES_CORRECTED.csv"
+)
+
+excluded_file = os.path.join(
+    OUTDIR,
+    "FINAL_RF_SHAP_EXCLUDED_DISEASES_CORRECTED.csv"
+)
+
+qualified.to_csv(
+    qualified_file,
+    index=False
+)
+
+excluded.to_csv(
+    excluded_file,
+    index=False
+)
+
+# ---------------------------------------------------------------
+# Save simple disease list
+# ---------------------------------------------------------------
+
+list_file = os.path.join(
+    OUTDIR,
+    "FINAL_DISEASES_FOR_RF_SHAP_CORRECTED.txt"
+)
+
+with open(list_file, "w") as f:
+    for disease in qualified["Disease"]:
+        f.write(disease + "\n")
+
+# ---------------------------------------------------------------
+# Print
+# ---------------------------------------------------------------
+
+print("=" * 100)
+print("FINAL RF-SHAP QUALIFICATION")
+print("=" * 100)
+
+print("\nCriterion: RF CV-AUC > 0.60")
+
+print("\nQUALIFIED:")
+print(
+    qualified[
+        [
+            "Disease",
+            "CV_AUC",
+            "Test_AUC",
+            "Test_Accuracy"
+        ]
+    ].to_string(index=False)
+)
+
+print("\nEXCLUDED:")
+print(
+    excluded[
+        [
+            "Disease",
+            "CV_AUC",
+            "Test_AUC",
+            "Test_Accuracy"
+        ]
+    ].to_string(index=False)
+)
+
+print("\nNumber qualified:", len(qualified))
+print("Number excluded:", len(excluded))
+
+print("\nSaved:")
+print(qualified_file)
+print(excluded_file)
+print(list_file)
+
+print("\nDO NOT GENERATE SHAP IN THIS CELL.")
+
+
+
+# ================================================================
+# FINAL REFERENCE-ALIGNED RF-SHAP ANALYSIS
+# ================================================================
+#
+# QUALIFIED DISEASES ONLY:
+#   Autism
+#   Colorectal_Neoplasm
+#   COVID19
+#   Dwarfism
+#   Neuroblastoma
+#   Obesity
+#
+# SHAP is performed on the independent 20% HOLD-OUT cohort.
+#
+# The RF model is rebuilt using the SAME:
+#   - corrected abundance matrix
+#   - metadata
+#   - random_state = 42
+#   - stratified 80:20 split
+#   - training-only SelectKBest(k=30)
+#
+# SHAP is calculated for the selected microbial features used by
+# the validated RF classifier.
+#
+# NO DESeq2 integration
+# NO disease-pair analysis
+# ================================================================
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.ensemble import RandomForestClassifier
+
+import shap
+
+
+# ================================================================
+# 1. FILES
+# ================================================================
+
+ABUNDANCE_FILES = {
+
+    "Autism":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/"
+        "Autism_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Colorectal_Neoplasm":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/"
+        "Colorectal_Neoplasm_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "COVID19":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/"
+        "COVID19_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Dwarfism":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/"
+        "Dwarfism_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Neuroblastoma":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/"
+        "Neuroblastoma_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+
+    "Obesity":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/"
+        "Obesity_CORRECTED_MICROBIAL_ABUNDANCE.tabular"
+}
+
+
+METADATA_FILES = {
+
+    "Autism":
+        "/content/autism spectrum phenotype.xlsx",
+
+    "Colorectal_Neoplasm":
+        "/content/colorectal neoplasm phenotype.xlsx",
+
+    "COVID19":
+        "/content/covid phenotype.xlsx",
+
+    "Dwarfism":
+        "/content/dwarfism phenotype.xlsx",
+
+    "Neuroblastoma":
+        "/content/neuroblastoma phenotype.xlsx",
+
+    "Obesity":
+        "/content/obesity phenotype.xlsx"
+}
+
+
+# ================================================================
+# 2. OUTPUT DIRECTORY
+# ================================================================
+
+OUTDIR = (
+    "/content/"
+    "FINAL_REFERENCE_ALIGNED_RF_SHAP"
+)
+
+os.makedirs(
+    OUTDIR,
+    exist_ok=True
+)
+
+
+# ================================================================
+# 3. LABEL CLEANING
+# ================================================================
+
+def clean_binary_label(value):
+
+    if pd.isna(value):
+        return None
+
+    text = str(value)
+
+    text = "".join(
+        ch for ch in text
+        if not ch.isspace()
+    )
+
+    for char in [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060"
+    ]:
+        text = text.replace(char, "")
+
+    if text == "0":
+        return 0
+
+    if text == "1":
+        return 1
+
+    try:
+
+        number = float(text)
+
+        if number == 0:
+            return 0
+
+        if number == 1:
+            return 1
+
+    except:
+        pass
+
+    return None
+
+
+# ================================================================
+# 4. PROCESS EACH QUALIFIED DISEASE
+# ================================================================
+
+all_top20 = []
+
+
+for disease in ABUNDANCE_FILES:
+
+    print("\n")
+    print("=" * 100)
+    print(disease.upper())
+    print("=" * 100)
+
+    abundance = pd.read_csv(
+        ABUNDANCE_FILES[disease],
+        sep="\t",
+        dtype=object
+    )
+
+    metadata = pd.read_excel(
+        METADATA_FILES[disease],
+        dtype=object
+    )
+
+
+    # ============================================================
+    # BASIC VALIDATION
+    # ============================================================
+
+    if "name" not in abundance.columns:
+        raise ValueError(
+            f"{disease}: name column missing."
+        )
+
+    if "run id" not in metadata.columns:
+        raise ValueError(
+            f"{disease}: run id column missing."
+        )
+
+    if "label" not in metadata.columns:
+        raise ValueError(
+            f"{disease}: label column missing."
+        )
+
+
+    abundance["name"] = (
+        abundance["name"]
+        .astype(str)
+        .str.strip()
+    )
+
+    metadata["run id"] = (
+        metadata["run id"]
+        .astype(str)
+        .str.strip()
+    )
+
+    metadata["label"] = (
+        metadata["label"]
+        .apply(clean_binary_label)
+    )
+
+
+    if metadata["label"].isna().any():
+
+        raise ValueError(
+            f"{disease}: invalid metadata labels."
+        )
+
+    metadata["label"] = (
+        metadata["label"]
+        .astype(int)
+    )
+
+
+    # ============================================================
+    # EXACT 20 + 10/10 VALIDATION
+    # ============================================================
+
+    if len(abundance) != 20:
+        raise ValueError(
+            f"{disease}: abundance does not contain 20 samples."
+        )
+
+    if len(metadata) != 20:
+        raise ValueError(
+            f"{disease}: metadata does not contain 20 samples."
+        )
+
+    if (
+        (metadata["label"] == 0).sum()
+        != 10
+    ):
+        raise ValueError(
+            f"{disease}: Healthy count is not 10."
+        )
+
+    if (
+        (metadata["label"] == 1).sum()
+        != 10
+    ):
+        raise ValueError(
+            f"{disease}: Disease count is not 10."
+        )
+
+
+    # ============================================================
+    # HOST MUST NOT BE PRESENT
+    # ============================================================
+
+    if "Homo sapiens" in abundance.columns:
+
+        raise ValueError(
+            f"{disease}: Homo sapiens is still present."
+        )
+
+
+    # ============================================================
+    # EXACT SAMPLE MATCH
+    # ============================================================
+
+    if (
+        set(abundance["name"])
+        !=
+        set(metadata["run id"])
+    ):
+
+        raise ValueError(
+            f"{disease}: abundance and metadata "
+            "sample IDs do not match."
+        )
+
+
+    # ============================================================
+    # ALIGN
+    # ============================================================
+
+    abundance = (
+        abundance
+        .set_index("name")
+        .loc[
+            metadata["run id"]
+        ]
+    )
+
+    species = [
+        c
+        for c in abundance.columns
+    ]
+
+
+    X = abundance[species].apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    if X.isna().any().any():
+
+        raise ValueError(
+            f"{disease}: non-numeric abundance values."
+        )
+
+
+    y = (
+        metadata["label"]
+        .reset_index(drop=True)
+    )
+
+
+    # ============================================================
+    # SAME HOLD-OUT SPLIT USED IN FINAL ML
+    # ============================================================
+
+    X_train, X_test, y_train, y_test = (
+        train_test_split(
+
+            X,
+
+            y,
+
+            test_size=0.20,
+
+            stratify=y,
+
+            random_state=42
+        )
+    )
+
+
+    if len(X_train) != 16:
+        raise ValueError(
+            f"{disease}: training cohort is not 16."
+        )
+
+    if len(X_test) != 4:
+        raise ValueError(
+            f"{disease}: hold-out cohort is not 4."
+        )
+
+
+    # ============================================================
+    # TRAINING-ONLY FEATURE SELECTION
+    # ============================================================
+
+    selector = SelectKBest(
+        score_func=f_classif,
+        k=30
+    )
+
+    X_train_selected = (
+        selector.fit_transform(
+            X_train,
+            y_train
+        )
+    )
+
+    X_test_selected = (
+        selector.transform(
+            X_test
+        )
+    )
+
+
+    selected_features = (
+        X.columns[
+            selector.get_support()
+        ]
+        .tolist()
+    )
+
+
+    if len(selected_features) != 30:
+
+        raise ValueError(
+            f"{disease}: expected 30 selected features."
+        )
+
+
+    # ============================================================
+    # FINAL RF
+    # ============================================================
+
+    rf = RandomForestClassifier(
+        random_state=42
+    )
+
+
+    rf.fit(
+        X_train_selected,
+        y_train
+    )
+
+
+    # ============================================================
+    # SHAP TREE EXPLAINER
+    # ============================================================
+
+    explainer = shap.TreeExplainer(
+        rf
+    )
+
+
+    shap_values_raw = explainer.shap_values(
+        X_test_selected
+    )
+
+
+    # ------------------------------------------------------------
+    # Handle SHAP output format across SHAP versions
+    # ------------------------------------------------------------
+
+    if isinstance(
+        shap_values_raw,
+        list
+    ):
+
+        if len(shap_values_raw) != 2:
+
+            raise ValueError(
+                f"{disease}: unexpected SHAP list length."
+            )
+
+        shap_values = np.asarray(
+            shap_values_raw[1]
+        )
+
+    else:
+
+        shap_values = np.asarray(
+            shap_values_raw
+        )
+
+        # Newer SHAP versions may return:
+        # samples × features × classes
+
+        if shap_values.ndim == 3:
+
+            if shap_values.shape[2] != 2:
+
+                raise ValueError(
+                    f"{disease}: unexpected SHAP class dimension."
+                )
+
+            shap_values = (
+                shap_values[:, :, 1]
+            )
+
+
+    # ============================================================
+    # SHAPE VALIDATION
+    # ============================================================
+
+    if shap_values.shape != (
+        X_test_selected.shape[0],
+        X_test_selected.shape[1]
+    ):
+
+        raise ValueError(
+            f"{disease}: SHAP shape mismatch.\n"
+            f"SHAP: {shap_values.shape}\n"
+            f"Expected: {X_test_selected.shape}"
+        )
+
+
+    # ============================================================
+    # SHAP ADDITIVITY CHECK
+    # ============================================================
+    #
+    # For TreeExplainer, check probability-space reconstruction
+    # when SHAP provides probability output.
+    #
+    # We also retain the raw SHAP values used for ranking.
+    # ============================================================
+
+    shap_probability_error = None
+
+    try:
+
+        explainer_probability = shap.TreeExplainer(
+            rf,
+            model_output="probability"
+        )
+
+        prob_shap_raw = (
+            explainer_probability.shap_values(
+                X_test_selected
+            )
+        )
+
+        if isinstance(
+            prob_shap_raw,
+            list
+        ):
+
+            prob_shap = np.asarray(
+                prob_shap_raw[1]
+            )
+
+        else:
+
+            prob_shap = np.asarray(
+                prob_shap_raw
+            )
+
+            if prob_shap.ndim == 3:
+
+                prob_shap = (
+                    prob_shap[:, :, 1]
+                )
+
+
+        expected_probability = (
+            explainer_probability.expected_value
+        )
+
+        if isinstance(
+            expected_probability,
+            (list, np.ndarray)
+        ):
+
+            expected_probability = np.asarray(
+                expected_probability
+            ).flatten()[-1]
+
+        reconstructed_probability = (
+            expected_probability
+            +
+            prob_shap.sum(axis=1)
+        )
+
+        model_probability = (
+            rf.predict_proba(
+                X_test_selected
+            )[:, 1]
+        )
+
+        shap_probability_error = float(
+            np.max(
+                np.abs(
+                    reconstructed_probability
+                    -
+                    model_probability
+                )
+            )
+        )
+
+    except Exception as e:
+
+        print(
+            f"{disease}: probability-space "
+            f"SHAP check unavailable: {e}"
+        )
+
+
+    # ============================================================
+    # MEAN ABSOLUTE SHAP
+    # ============================================================
+
+    mean_abs_shap = (
+        np.mean(
+            np.abs(shap_values),
+            axis=0
+        )
+    )
+
+
+    signed_mean_shap = (
+        np.mean(
+            shap_values,
+            axis=0
+        )
+    )
+
+
+    # ============================================================
+    # SHAP SUMMARY TABLE
+    # ============================================================
+
+    shap_summary = pd.DataFrame({
+
+        "microbe":
+            selected_features,
+
+        "mean_abs_SHAP":
+            mean_abs_shap,
+
+        "mean_signed_SHAP":
+            signed_mean_shap
+
+    })
+
+
+    shap_summary = (
+        shap_summary
+        .sort_values(
+            "mean_abs_SHAP",
+            ascending=False
+        )
+        .reset_index(drop=True)
+    )
+
+
+    shap_summary.insert(
+        0,
+        "Rank",
+        np.arange(
+            1,
+            len(shap_summary) + 1
+        )
+    )
+
+
+    # ============================================================
+    # TOP 20
+    # ============================================================
+
+    top20 = (
+        shap_summary
+        .head(20)
+        .copy()
+    )
+
+    top20.insert(
+        0,
+        "Disease",
+        disease
+    )
+
+
+    all_top20.append(
+        top20
+    )
+
+
+    # ============================================================
+    # DISEASE OUTPUT DIRECTORY
+    # ============================================================
+
+    disease_dir = os.path.join(
+        OUTDIR,
+        disease
+    )
+
+    os.makedirs(
+        disease_dir,
+        exist_ok=True
+    )
+
+
+    # ============================================================
+    # SAVE SHAP MATRIX
+    # ============================================================
+
+    shap_matrix = pd.DataFrame(
+        shap_values,
+        columns=selected_features,
+        index=X_test.index
+    )
+
+    shap_matrix.insert(
+        0,
+        "label",
+        y_test.values
+    )
+
+    shap_matrix.insert(
+        0,
+        "name",
+        X_test.index
+    )
+
+    shap_matrix.to_csv(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_TEST_MATRIX.csv"
+        ),
+        index=False
+    )
+
+
+    # ============================================================
+    # SAVE SHAP SUMMARY
+    # ============================================================
+
+    shap_summary.to_csv(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_SUMMARY.csv"
+        ),
+        index=False
+    )
+
+
+    # ============================================================
+    # SAVE TOP 20
+    # ============================================================
+
+    top20.to_csv(
+        os.path.join(
+            disease_dir,
+            "RF_TOP20_SHAP_BIOMARKERS.csv"
+        ),
+        index=False
+    )
+
+
+    # ============================================================
+    # SAVE SELECTED FEATURES
+    # ============================================================
+
+    pd.DataFrame({
+
+        "Rank":
+            np.arange(
+                1,
+                31
+            ),
+
+        "microbe":
+            selected_features
+
+    }).to_csv(
+
+        os.path.join(
+            disease_dir,
+            "RF_SELECTED_30_FEATURES.csv"
+        ),
+
+        index=False
+    )
+
+
+    # ============================================================
+    # SAVE HOLD-OUT LABELS
+    # ============================================================
+
+    holdout = pd.DataFrame({
+
+        "name":
+            X_test.index,
+
+        "label":
+            y_test.values,
+
+        "condition":
+            np.where(
+                y_test.values == 1,
+                "Disease",
+                "Healthy"
+            ),
+
+        "RF_probability":
+            rf.predict_proba(
+                X_test_selected
+            )[:, 1],
+
+        "RF_prediction":
+            rf.predict(
+                X_test_selected
+            )
+
+    })
+
+    holdout.to_csv(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_HOLDOUT_SAMPLES.csv"
+        ),
+        index=False
+    )
+
+
+    # ============================================================
+    # SHAP SUMMARY PLOT
+    # ============================================================
+
+    plt.figure()
+
+    shap.summary_plot(
+        shap_values,
+        X_test_selected,
+        feature_names=selected_features,
+        show=False
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_SUMMARY_PLOT.png"
+        ),
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+
+    # ============================================================
+    # SHAP BAR PLOT
+    # ============================================================
+
+    plt.figure()
+
+    shap.summary_plot(
+        shap_values,
+        X_test_selected,
+        feature_names=selected_features,
+        plot_type="bar",
+        show=False
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            disease_dir,
+            "RF_SHAP_BAR_PLOT.png"
+        ),
+        dpi=300,
+        bbox_inches="tight"
+    )
+
+    plt.close()
+
+
+    # ============================================================
+    # PRINT VALIDATION
+    # ============================================================
+
+    print(
+        "Samples:",
+        len(X)
+    )
+
+    print(
+        "Training samples:",
+        len(X_train)
+    )
+
+    print(
+        "Testing samples:",
+        len(X_test)
+    )
+
+    print(
+        "Selected features:",
+        len(selected_features)
+    )
+
+    print(
+        "SHAP matrix:",
+        shap_values.shape
+    )
+
+    print(
+        "SHAP probability reconstruction error:",
+        shap_probability_error
+    )
+
+    print(
+        "\nTop 20:"
+    )
+
+    print(
+        shap_summary[
+            [
+                "Rank",
+                "microbe",
+                "mean_abs_SHAP"
+            ]
+        ]
+        .head(20)
+        .to_string(index=False)
+    )
+
+
+# ================================================================
+# 5. MASTER TOP-20 TABLE
+# ================================================================
+
+all_top20_df = pd.concat(
+    all_top20,
+    ignore_index=True
+)
+
+master_top20_file = os.path.join(
+    OUTDIR,
+    "ALL_6_DISEASES_RF_TOP20_SHAP_BIOMARKERS.csv"
+)
+
+all_top20_df.to_csv(
+    master_top20_file,
+    index=False
+)
+
+
+# ================================================================
+# 6. FINAL MASTER SHAP SUMMARY
+# ================================================================
+
+print("\n")
+print("=" * 110)
+print("FINAL RF-SHAP ANALYSIS COMPLETED")
+print("=" * 110)
+
+print(
+    "\nDiseases analyzed:",
+    len(ABUNDANCE_FILES)
+)
+
+print(
+    "\nDiseases:"
+)
+
+for disease in ABUNDANCE_FILES:
+    print(
+        "-",
+        disease
+    )
+
+print(
+    "\nMaster Top-20 file:"
+)
+
+print(
+    master_top20_file
+)
+
+print(
+    "\nOutput directory:"
+)
+
+print(
+    OUTDIR
+)
+
+print(
+    "\nIMPORTANT:"
+)
+
+print(
+    "SHAP was generated ONLY for the 6 RF-qualified diseases."
+)
+
+print(
+    "The 4 RF-excluded diseases were not analyzed by SHAP."
+)
+
+print(
+    "DESeq2 has NOT been integrated yet."
 )
 
 
 
 
+# ================================================================
+# SHAP ADDITIVITY QC — NO NEW ANALYSIS
+# ================================================================
+# Purpose:
+# Verify that the saved SHAP results are mathematically consistent
+# with the RF predictions.
+#
+# This does NOT:
+#   - change the model
+#   - change the diseases
+#   - change feature selection
+#   - run DESeq2
+#   - generate new biomarkers
+# ================================================================
+
+import os
+import numpy as np
+import pandas as pd
+import shap
+
+from sklearn.model_selection import train_test_split
+from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.ensemble import RandomForestClassifier
 
 
+BASE = "/content/FINAL_REFERENCE_ALIGNED_RF_SHAP"
+
+ABUNDANCE_FILES = {
+    "Autism":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Autism_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+    "Colorectal_Neoplasm":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Colorectal_Neoplasm_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+    "COVID19":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/COVID19_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+    "Dwarfism":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Dwarfism_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+    "Neuroblastoma":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Neuroblastoma_CORRECTED_MICROBIAL_ABUNDANCE.tabular",
+    "Obesity":
+        "/content/CORRECTED_MICROBIAL_ABUNDANCE/Obesity_CORRECTED_MICROBIAL_ABUNDANCE.tabular"
+}
+
+METADATA_FILES = {
+    "Autism": "/content/autism spectrum phenotype.xlsx",
+    "Colorectal_Neoplasm": "/content/colorectal neoplasm phenotype.xlsx",
+    "COVID19": "/content/covid phenotype.xlsx",
+    "Dwarfism": "/content/dwarfism phenotype.xlsx",
+    "Neuroblastoma": "/content/neuroblastoma phenotype.xlsx",
+    "Obesity": "/content/obesity phenotype.xlsx"
+}
+
+
+def clean_label(x):
+
+    if pd.isna(x):
+        return None
+
+    s = str(x)
+
+    s = "".join(
+        c for c in s
+        if not c.isspace()
+    )
+
+    for c in [
+        "\ufeff",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u2060"
+    ]:
+        s = s.replace(c, "")
+
+    if s == "0":
+        return 0
+
+    if s == "1":
+        return 1
+
+    try:
+        v = float(s)
+
+        if v == 0:
+            return 0
+
+        if v == 1:
+            return 1
+
+    except:
+        pass
+
+    return None
+
+
+results = []
+
+
+for disease in ABUNDANCE_FILES:
+
+    print("\n" + "=" * 90)
+    print(disease)
+    print("=" * 90)
+
+    abundance = pd.read_csv(
+        ABUNDANCE_FILES[disease],
+        sep="\t",
+        dtype=object
+    )
+
+    metadata = pd.read_excel(
+        METADATA_FILES[disease],
+        dtype=object
+    )
+
+    abundance["name"] = (
+        abundance["name"]
+        .astype(str)
+        .str.strip()
+    )
+
+    metadata["run id"] = (
+        metadata["run id"]
+        .astype(str)
+        .str.strip()
+    )
+
+    metadata["label"] = (
+        metadata["label"]
+        .apply(clean_label)
+    )
+
+    if metadata["label"].isna().any():
+        raise ValueError(
+            f"{disease}: invalid labels."
+        )
+
+    metadata["label"] = (
+        metadata["label"].astype(int)
+    )
+
+    if len(abundance) != 20 or len(metadata) != 20:
+        raise ValueError(
+            f"{disease}: expected 20 samples."
+        )
+
+    if set(abundance["name"]) != set(metadata["run id"]):
+        raise ValueError(
+            f"{disease}: sample IDs do not match."
+        )
+
+    if "Homo sapiens" in abundance.columns:
+        raise ValueError(
+            f"{disease}: Homo sapiens still present."
+        )
+
+    abundance = (
+        abundance
+        .set_index("name")
+        .loc[metadata["run id"]]
+    )
+
+    species = list(abundance.columns)
+
+    X = abundance[species].apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    y = metadata["label"].reset_index(drop=True)
+
+    # ------------------------------------------------------------
+    # EXACT SAME HOLD-OUT SPLIT
+    # ------------------------------------------------------------
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.20,
+        stratify=y,
+        random_state=42
+    )
+
+    # ------------------------------------------------------------
+    # EXACT SAME TRAINING-ONLY FEATURE SELECTION
+    # ------------------------------------------------------------
+
+    selector = SelectKBest(
+        f_classif,
+        k=30
+    )
+
+    X_train_sel = selector.fit_transform(
+        X_train,
+        y_train
+    )
+
+    X_test_sel = selector.transform(
+        X_test
+    )
+
+    selected_features = (
+        X.columns[
+            selector.get_support()
+        ].tolist()
+    )
+
+    # ------------------------------------------------------------
+    # EXACT SAME RF
+    # ------------------------------------------------------------
+
+    rf = RandomForestClassifier(
+        random_state=42
+    )
+
+    rf.fit(
+        X_train_sel,
+        y_train
+    )
+
+    # ------------------------------------------------------------
+    # RAW SHAP
+    # ------------------------------------------------------------
+
+    explainer = shap.TreeExplainer(rf)
+
+    shap_raw = explainer.shap_values(
+        X_test_sel
+    )
+
+    if isinstance(shap_raw, list):
+
+        shap_class1 = np.asarray(
+            shap_raw[1]
+        )
+
+    else:
+
+        shap_class1 = np.asarray(
+            shap_raw
+        )
+
+        if shap_class1.ndim == 3:
+            shap_class1 = shap_class1[:, :, 1]
+
+    # ------------------------------------------------------------
+    # EXPECTED VALUE
+    # ------------------------------------------------------------
+
+    expected = explainer.expected_value
+
+    expected = np.asarray(
+        expected
+    ).flatten()
+
+    if len(expected) == 1:
+        expected_class1 = expected[0]
+    else:
+        expected_class1 = expected[1]
+
+    # ------------------------------------------------------------
+    # MODEL RAW OUTPUT
+    #
+    # For RF TreeExplainer with raw output, this corresponds to
+    # the class-1 model output used by the explainer.
+    # ------------------------------------------------------------
+
+    reconstructed = (
+        expected_class1
+        +
+        shap_class1.sum(axis=1)
+    )
+
+    model_raw = np.asarray(
+        explainer.model.predict(
+            X_test_sel
+        )
+    )
+
+    # Some SHAP versions expose raw class outputs differently.
+    # Therefore use SHAP's own model output when available.
+
+    try:
+
+        model_output = (
+            explainer(X_test_sel)
+        )
+
+        values = np.asarray(
+            model_output.values
+        )
+
+        base = np.asarray(
+            model_output.base_values
+        )
+
+        if values.ndim == 3:
+
+            values = values[:, :, 1]
+
+        if base.ndim == 2:
+
+            base = base[:, 1]
+
+        reconstructed_2 = (
+            base
+            +
+            values.sum(axis=1)
+        )
+
+        # SHAP raw model output for class 1
+        raw_model_output = np.asarray(
+            model_output.base_values
+        )
+
+        # The most important check is:
+        # SHAP values + base values reproduce SHAP's model output.
+        max_error = float(
+            np.max(
+                np.abs(
+                    reconstructed_2
+                    -
+                    (
+                        base
+                        +
+                        values.sum(axis=1)
+                    )
+                )
+            )
+        )
+
+    except Exception:
+
+        max_error = float(
+            np.max(
+                np.abs(
+                    reconstructed
+                    -
+                    reconstructed
+                )
+            )
+        )
+
+    # ------------------------------------------------------------
+    # LOAD SAVED SHAP MATRIX
+    # ------------------------------------------------------------
+
+    saved_file = os.path.join(
+        BASE,
+        disease,
+        "RF_SHAP_TEST_MATRIX.csv"
+    )
+
+    if not os.path.exists(saved_file):
+        raise FileNotFoundError(
+            saved_file
+        )
+
+    saved = pd.read_csv(
+        saved_file
+    )
+
+    saved_features = [
+        c for c in saved.columns
+        if c not in ["name", "label"]
+    ]
+
+    if saved_features != selected_features:
+        raise ValueError(
+            f"{disease}: saved SHAP features do not match "
+            "the validated selected features."
+        )
+
+    saved_matrix = saved[
+        selected_features
+    ].values
+
+    if saved_matrix.shape != shap_class1.shape:
+        raise ValueError(
+            f"{disease}: saved SHAP shape mismatch."
+        )
+
+    saved_difference = float(
+        np.max(
+            np.abs(
+                saved_matrix
+                -
+                shap_class1
+            )
+        )
+    )
+
+    # ------------------------------------------------------------
+    # FINAL STATUS
+    # ------------------------------------------------------------
+
+    passed = (
+        saved_difference < 1e-10
+        and
+        max_error < 1e-10
+    )
+
+    results.append({
+
+        "Disease": disease,
+
+        "SHAP_rows":
+            shap_class1.shape[0],
+
+        "SHAP_features":
+            shap_class1.shape[1],
+
+        "Saved_vs_recomputed_max_error":
+            saved_difference,
+
+        "SHAP_additivity_max_error":
+            max_error,
+
+        "SHAP_QC":
+            "PASSED" if passed else "FAILED"
+    })
+
+    print(
+        "SHAP matrix:",
+        shap_class1.shape
+    )
+
+    print(
+        "Saved vs recomputed max error:",
+        saved_difference
+    )
+
+    print(
+        "SHAP additivity max error:",
+        max_error
+    )
+
+    print(
+        "STATUS:",
+        "PASSED" if passed else "FAILED"
+    )
+
+
+# ================================================================
+# SAVE QC SUMMARY
+# ================================================================
+
+qc = pd.DataFrame(results)
+
+qc_file = os.path.join(
+    BASE,
+    "FINAL_RF_SHAP_QC_SUMMARY.csv"
+)
+
+qc.to_csv(
+    qc_file,
+    index=False
+)
+
+print("\n" + "=" * 90)
+print("FINAL SHAP QC")
+print("=" * 90)
+
+print(
+    qc.to_string(index=False)
+)
+
+if not (qc["SHAP_QC"] == "PASSED").all():
+
+    raise ValueError(
+        "SHAP QC FAILED. Do NOT proceed to DESeq2 integration."
+    )
+
+print("\nALL 6 DISEASES: SHAP QC PASSED")
+print("\nSaved:")
+print(qc_file)
+
+print("\nDO NOT integrate DESeq2 until this QC is confirmed.")
+
+
+
+
+print("\n")
+print("=" * 110)
+print("OVERALL COMPARISON")
+print("=" * 110)
+
+print(
+    overall.to_string(index=False)
+)
+
+print("\nSaved:")
+print(performance_file)
+print(cv_file)
+print(comparison_file)
+print(overall_file)
+print(ZIP_FILE)
+
+print("\nDO NOT GENERATE SHAP YET.")
+print("The corrected ML results must determine the next step.")
