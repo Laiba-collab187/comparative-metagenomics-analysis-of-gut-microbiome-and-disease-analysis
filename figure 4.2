@@ -4675,4 +4675,5282 @@ files.download(
 
 
 
+# =====================================================================
+# FINAL FIGURE 4.2e + 4.2f
+# MICROBIAL SPECIES = 30 PT + BOLD
+# =====================================================================
+#
+# 4.2a–d are NOT regenerated.
+#
+# 4.2e:
+#   Case-associated microbes shared by >=3 diseases
+#
+# 4.2f:
+#   Control-associated microbes shared by >=3 diseases
+#
+# Each is split into two separate SVGs.
+#
+# FONT:
+#   Microbial species = 30 pt BOLD
+#   Disease labels    = 18 pt BOLD
+#   Axis labels       = 20 pt BOLD
+#   Titles            = 23 pt BOLD
+#   Colorbar label    = 18 pt BOLD
+#
+# COLOUR:
+#   Negative LFC = BLUE
+#   Zero LFC     = WHITE
+#   Positive LFC = RED
+#
+# NO DESeq2 RERUN
+# NO ML RERUN
+# NO SHAP RERUN
+# =====================================================================
+
+import os
+import zipfile
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+from google.colab import files
+
+# =====================================================================
+# PATHS
+# =====================================================================
+
+OUT_DIR = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2_SEPARATE_SVG"
+)
+
+RECURRENT_DIR = Path(
+    "/content/FINAL_THESIS_FIGURES_4_2_4_3_SVG"
+)
+
+CASE_LFC_FILE = (
+    RECURRENT_DIR /
+    "CASE_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+CONTROL_LFC_FILE = (
+    RECURRENT_DIR /
+    "CONTROL_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+if not CASE_LFC_FILE.exists():
+    raise FileNotFoundError(
+        f"Corrected CASE LFC matrix not found:\n{CASE_LFC_FILE}"
+    )
+
+if not CONTROL_LFC_FILE.exists():
+    raise FileNotFoundError(
+        f"Corrected CONTROL LFC matrix not found:\n{CONTROL_LFC_FILE}"
+    )
+
+# =====================================================================
+# DISEASE ORDER
+# =====================================================================
+
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "Dwarfism",
+    "Ulcerative_Colitis",
+    "Fibromyalgia",
+    "IBS",
+    "Fatigue",
+    "Obesity",
+    "Neuroblastoma",
+    "COVID19"
+]
+
+DISPLAY = {
+    "Autism": "Autism",
+    "Colorectal_Neoplasm": "Colorectal neoplasm",
+    "Dwarfism": "Dwarfism",
+    "Ulcerative_Colitis": "Ulcerative colitis",
+    "Fibromyalgia": "Fibromyalgia",
+    "IBS": "IBS",
+    "Fatigue": "Fatigue",
+    "Obesity": "Obesity",
+    "Neuroblastoma": "Neuroblastoma",
+    "COVID19": "COVID-19"
+}
+
+# =====================================================================
+# LOAD MATRICES
+# =====================================================================
+
+print("=" * 100)
+print("LOADING CORRECTED RECURRENT LFC MATRICES")
+print("=" * 100)
+
+raw_case = pd.read_csv(
+    CASE_LFC_FILE,
+    index_col=0
+)
+
+raw_control = pd.read_csv(
+    CONTROL_LFC_FILE,
+    index_col=0
+)
+
+print(
+    f"Raw CASE matrix    : {raw_case.shape}"
+)
+
+print(
+    f"Raw CONTROL matrix : {raw_control.shape}"
+)
+
+# =====================================================================
+# ORIENTATION FUNCTION
+# =====================================================================
+
+def orient_matrix(
+    df,
+    expected_taxa,
+    label
+):
+
+    # ---------------------------------------------------------------
+    # Check whether diseases are columns
+    # ---------------------------------------------------------------
+
+    column_map = {
+        str(c).strip(): c
+        for c in df.columns
+    }
+
+    disease_columns = []
+
+    for disease in DISEASES:
+
+        if disease in column_map:
+
+            disease_columns.append(
+                column_map[disease]
+            )
+
+        elif DISPLAY[disease] in column_map:
+
+            disease_columns.append(
+                column_map[DISPLAY[disease]]
+            )
+
+    # ---------------------------------------------------------------
+    # TAXA × DISEASE
+    # ---------------------------------------------------------------
+
+    if len(disease_columns) == 10:
+
+        result = df[
+            disease_columns
+        ].copy()
+
+        result.columns = DISEASES
+
+        print(
+            f"{label}: taxa × disease orientation detected."
+        )
+
+    # ---------------------------------------------------------------
+    # DISEASE × TAXA
+    # ---------------------------------------------------------------
+
+    else:
+
+        index_map = {
+            str(i).strip(): i
+            for i in df.index
+        }
+
+        disease_rows = []
+
+        for disease in DISEASES:
+
+            if disease in index_map:
+
+                disease_rows.append(
+                    index_map[disease]
+                )
+
+            elif DISPLAY[disease] in index_map:
+
+                disease_rows.append(
+                    index_map[DISPLAY[disease]]
+                )
+
+        if len(disease_rows) != 10:
+
+            raise ValueError(
+                f"{label}: could not identify all 10 diseases."
+            )
+
+        result = df.loc[
+            disease_rows
+        ].copy()
+
+        result.index = DISEASES
+
+        result = result.T
+
+        print(
+            f"{label}: disease × taxa orientation detected; "
+            f"transposed."
+        )
+
+    # ---------------------------------------------------------------
+    # NUMERIC
+    # ---------------------------------------------------------------
+
+    result = result.apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    # ---------------------------------------------------------------
+    # FINAL DISEASE ORDER
+    # ---------------------------------------------------------------
+
+    result = result.reindex(
+        columns=DISEASES
+    )
+
+    # ---------------------------------------------------------------
+    # FINAL SHAPE QC
+    # ---------------------------------------------------------------
+
+    if result.shape != (
+        expected_taxa,
+        10
+    ):
+
+        raise ValueError(
+            f"{label}: incorrect final shape.\n"
+            f"Expected: {(expected_taxa, 10)}\n"
+            f"Found: {result.shape}"
+        )
+
+    return result
+
+
+# =====================================================================
+# ORIENT CASE / CONTROL
+# =====================================================================
+
+case_lfc = orient_matrix(
+    raw_case,
+    53,
+    "CASE"
+)
+
+control_lfc = orient_matrix(
+    raw_control,
+    68,
+    "CONTROL"
+)
+
+print("\n" + "=" * 100)
+print("RECURRENT SPECIES QC")
+print("=" * 100)
+
+print(
+    f"Case-associated recurrent taxa    = "
+    f"{len(case_lfc)} | VERIFIED"
+)
+
+print(
+    f"Control-associated recurrent taxa = "
+    f"{len(control_lfc)} | VERIFIED"
+)
+
+assert case_lfc.shape == (53, 10)
+assert control_lfc.shape == (68, 10)
+
+# =====================================================================
+# SAVE EXACT DATA USED FOR FIGURES
+# =====================================================================
+
+case_lfc.to_csv(
+    OUT_DIR /
+    "FIGURE_4_2e_CASE_LFC_MATRIX_USED.csv"
+)
+
+control_lfc.to_csv(
+    OUT_DIR /
+    "FIGURE_4_2f_CONTROL_LFC_MATRIX_USED.csv"
+)
+
+# =====================================================================
+# COMMON LFC SCALE
+# =====================================================================
+
+all_values = np.concatenate([
+    case_lfc.values.flatten(),
+    control_lfc.values.flatten()
+])
+
+all_values = all_values[
+    np.isfinite(all_values)
+]
+
+MAX_LFC = np.max(
+    np.abs(all_values)
+)
+
+if MAX_LFC == 0:
+    MAX_LFC = 1
+
+print(
+    f"\nCOMMON LFC SCALE:"
+    f" -{MAX_LFC:.3f} to +{MAX_LFC:.3f}"
+)
+
+# =====================================================================
+# SPLIT TAXA INTO TWO PARTS
+# =====================================================================
+
+case_mid = int(
+    np.ceil(
+        len(case_lfc) / 2
+    )
+)
+
+control_mid = int(
+    np.ceil(
+        len(control_lfc) / 2
+    )
+)
+
+case_part1 = case_lfc.iloc[
+    :case_mid
+].copy()
+
+case_part2 = case_lfc.iloc[
+    case_mid:
+].copy()
+
+control_part1 = control_lfc.iloc[
+    :control_mid
+].copy()
+
+control_part2 = control_lfc.iloc[
+    control_mid:
+].copy()
+
+print("\n" + "=" * 100)
+print("SPLIT QC")
+print("=" * 100)
+
+print(
+    f"4.2e Part I  : {len(case_part1)} taxa"
+)
+
+print(
+    f"4.2e Part II : {len(case_part2)} taxa"
+)
+
+print(
+    f"4.2f Part I  : {len(control_part1)} taxa"
+)
+
+print(
+    f"4.2f Part II : {len(control_part2)} taxa"
+)
+
+assert len(case_part1) + len(case_part2) == 53
+assert len(control_part1) + len(control_part2) == 68
+
+# =====================================================================
+# HEATMAP FUNCTION
+# =====================================================================
+
+def generate_heatmap(
+    matrix,
+    filename,
+    title,
+    x_label
+):
+
+    plot_data = matrix.T
+
+    n_taxa = plot_data.shape[1]
+
+    # ---------------------------------------------------------------
+    # VERY LARGE CANVAS
+    #
+    # 30-pt microbial names require substantially more width.
+    # ---------------------------------------------------------------
+
+    fig_width = max(
+        30,
+        min(
+            55,
+            n_taxa * 1.25
+        )
+    )
+
+    fig_height = 12
+
+    fig, ax = plt.subplots(
+        figsize=(
+            fig_width,
+            fig_height
+        )
+    )
+
+    # ---------------------------------------------------------------
+    # LFC COLOUR SCALE
+    # ---------------------------------------------------------------
+
+    im = ax.imshow(
+        plot_data.values,
+        aspect="auto",
+        cmap="RdBu_r",
+        vmin=-MAX_LFC,
+        vmax=MAX_LFC,
+        interpolation="nearest"
+    )
+
+    # ---------------------------------------------------------------
+    # DISEASE LABELS
+    # 18 PT BOLD
+    # ---------------------------------------------------------------
+
+    ax.set_yticks(
+        np.arange(10)
+    )
+
+    ax.set_yticklabels(
+        [
+            DISPLAY[d]
+            for d in DISEASES
+        ],
+        fontsize=18,
+        fontweight="bold"
+    )
+
+    # ---------------------------------------------------------------
+    # MICROBIAL SPECIES
+    #
+    # 30 PT + BOLD
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(n_taxa)
+    )
+
+    ax.set_xticklabels(
+        plot_data.columns.astype(str),
+        rotation=65,
+        ha="right",
+        fontsize=30,
+        fontweight="bold"
+    )
+
+    # ---------------------------------------------------------------
+    # X AXIS LABEL
+    # ---------------------------------------------------------------
+
+    ax.set_xlabel(
+        x_label,
+        fontsize=20,
+        fontweight="bold",
+        labelpad=25
+    )
+
+    # ---------------------------------------------------------------
+    # Y AXIS LABEL
+    # ---------------------------------------------------------------
+
+    ax.set_ylabel(
+        "Disease",
+        fontsize=20,
+        fontweight="bold",
+        labelpad=20
+    )
+
+    # ---------------------------------------------------------------
+    # TITLE
+    # ---------------------------------------------------------------
+
+    ax.set_title(
+        title,
+        fontsize=23,
+        fontweight="bold",
+        pad=28
+    )
+
+    # ---------------------------------------------------------------
+    # WHITE CELL BORDERS
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            -0.5,
+            n_taxa,
+            1
+        ),
+        minor=True
+    )
+
+    ax.set_yticks(
+        np.arange(
+            -0.5,
+            10,
+            1
+        ),
+        minor=True
+    )
+
+    ax.grid(
+        which="minor",
+        color="white",
+        linewidth=0.7,
+        alpha=0.7
+    )
+
+    ax.tick_params(
+        which="minor",
+        bottom=False,
+        left=False
+    )
+
+    # ---------------------------------------------------------------
+    # COLORBAR
+    # ---------------------------------------------------------------
+
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        fraction=0.025,
+        pad=0.025
+    )
+
+    cbar.set_label(
+        "log2 fold change",
+        fontsize=18,
+        fontweight="bold"
+    )
+
+    cbar.ax.tick_params(
+        labelsize=14
+    )
+
+    # ---------------------------------------------------------------
+    # LARGE BOTTOM SPACE FOR 30-PT LABELS
+    # ---------------------------------------------------------------
+
+    plt.subplots_adjust(
+        left=0.15,
+        right=0.96,
+        top=0.87,
+        bottom=0.48
+    )
+
+    # ---------------------------------------------------------------
+    # SAVE SVG
+    # ---------------------------------------------------------------
+
+    output_path = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output_path,
+        format="svg",
+        bbox_inches="tight"
+    )
+
+    plt.close(fig)
+
+    print(
+        f"SAVED: {output_path}"
+    )
+
+
+# =====================================================================
+# FIGURE 4.2e
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("GENERATING FIGURE 4.2e — 30 PT BOLD MICROBIAL LABELS")
+print("=" * 100)
+
+generate_heatmap(
+    case_part1,
+    "Figure_4_2e_CASE_Part_I.svg",
+    "Figure 4.2e — Case-associated microbes shared by more than two diseases (Part I)",
+    "Case-associated microbial species"
+)
+
+generate_heatmap(
+    case_part2,
+    "Figure_4_2e_CASE_Part_II.svg",
+    "Figure 4.2e — Case-associated microbes shared by more than two diseases (Part II)",
+    "Case-associated microbial species"
+)
+
+# =====================================================================
+# FIGURE 4.2f
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("GENERATING FIGURE 4.2f — 30 PT BOLD MICROBIAL LABELS")
+print("=" * 100)
+
+generate_heatmap(
+    control_part1,
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "Figure 4.2f — Control-associated microbes shared by more than two diseases (Part I)",
+    "Control-associated microbial species"
+)
+
+generate_heatmap(
+    control_part2,
+    "Figure_4_2f_CONTROL_Part_II.svg",
+    "Figure 4.2f — Control-associated microbes shared by more than two diseases (Part II)",
+    "Control-associated microbial species"
+)
+
+# =====================================================================
+# VERIFY NEW SVGs
+# =====================================================================
+
+new_files = [
+    "Figure_4_2e_CASE_Part_I.svg",
+    "Figure_4_2e_CASE_Part_II.svg",
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "Figure_4_2f_CONTROL_Part_II.svg"
+]
+
+print("\n" + "=" * 100)
+print("4.2e / 4.2f SVG QC")
+print("=" * 100)
+
+for filename in new_files:
+
+    path = OUT_DIR / filename
+
+    if not path.exists():
+        raise RuntimeError(
+            f"SVG MISSING:\n{path}"
+        )
+
+    with open(
+        path,
+        "r",
+        encoding="utf-8",
+        errors="ignore"
+    ) as f:
+
+        header = f.read(500).lower()
+
+    if "<svg" not in header:
+        raise RuntimeError(
+            f"INVALID SVG:\n{path}"
+        )
+
+    print(
+        f"{filename:<55} VERIFIED"
+    )
+
+# =====================================================================
+# VERIFY ALL 12 FIGURE 4.2 FILES
+# =====================================================================
+
+all_12 = [
+
+    "Figure_4_2a_CASE.svg",
+    "Figure_4_2a_CONTROL.svg",
+
+    "Figure_4_2b_CASE.svg",
+    "Figure_4_2b_CONTROL.svg",
+
+    "Figure_4_2c_CASE.svg",
+    "Figure_4_2c_CONTROL.svg",
+
+    "Figure_4_2d_CASE.svg",
+    "Figure_4_2d_CONTROL.svg",
+
+    "Figure_4_2e_CASE_Part_I.svg",
+    "Figure_4_2e_CASE_Part_II.svg",
+
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "Figure_4_2f_CONTROL_Part_II.svg"
+]
+
+print("\n" + "=" * 100)
+print("FINAL FIGURE 4.2 — 12 SVG QC")
+print("=" * 100)
+
+for filename in all_12:
+
+    path = OUT_DIR / filename
+
+    if not path.exists():
+        raise RuntimeError(
+            f"REQUIRED FIGURE MISSING:\n{path}"
+        )
+
+    print(
+        f"{filename:<60} VERIFIED"
+    )
+
+# =====================================================================
+# QC FILE
+# =====================================================================
+
+qc = pd.DataFrame({
+    "QC_Item": [
+        "Case recurrent taxa",
+        "Control recurrent taxa",
+        "Microbial species font",
+        "Microbial species weight",
+        "Disease font",
+        "Disease weight",
+        "SVG vector format",
+        "One graph per SVG",
+        "DESeq2 rerun",
+        "ML rerun",
+        "SHAP rerun"
+    ],
+    "Result": [
+        53,
+        68,
+        "30 pt",
+        "BOLD",
+        "18 pt",
+        "BOLD",
+        "VERIFIED",
+        "VERIFIED",
+        "NO",
+        "NO",
+        "NO"
+    ]
+})
+
+qc.to_csv(
+    OUT_DIR /
+    "FIGURE_4_2_30PT_FONT_QC.csv",
+    index=False
+)
+
+# =====================================================================
+# FINAL ZIP
+# =====================================================================
+
+zip_path = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2_30PT_BOLD_12_SVGs.zip"
+)
+
+if zip_path.exists():
+    zip_path.unlink()
+
+with zipfile.ZipFile(
+    zip_path,
+    "w",
+    compression=zipfile.ZIP_DEFLATED
+) as z:
+
+    for filename in all_12:
+
+        path = OUT_DIR / filename
+
+        z.write(
+            path,
+            arcname=filename
+        )
+
+print("\n" + "=" * 100)
+print("FIGURE 4.2 — FINAL 30 PT VERSION COMPLETED")
+print("=" * 100)
+
+print("Microbial species : 30 pt BOLD")
+print("Disease labels    : 18 pt BOLD")
+print("Axis labels       : 20 pt BOLD")
+print("Titles            : 23 pt BOLD")
+print("SVG vector        : VERIFIED")
+print("12 SVG files      : VERIFIED")
+print("DESeq2 rerun      : NO")
+print("ML rerun          : NO")
+print("SHAP rerun        : NO")
+
+print("\nZIP:")
+print(zip_path)
+
+# =====================================================================
+# DOWNLOAD
+# =====================================================================
+
+files.download(
+    str(zip_path)
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# =====================================================================
+# FINAL FIGURE 4.2e + 4.2f
+# REFERENCE-STYLE RECURRENT MICROBE HEATMAPS
+# =====================================================================
+#
+# 4.2e = Case-associated microbes shared by >=3 diseases
+# 4.2f = Control-associated microbes shared by >=3 diseases
+#
+# EACH PART = ONE SVG
+#
+# 4.2e Part I
+# 4.2e Part II
+# 4.2f Part I
+# 4.2f Part II
+#
+# STYLE:
+#   - 27 pt BOLD microbial species names
+#   - black cell boundaries
+#   - black x-axis tick/connector lines
+#   - red-white-blue LFC scale
+#   - large bold disease names
+#   - publication/thesis style
+#
+# DATA:
+#   corrected recurrent LFC matrices already generated
+#
+# NO DESeq2 RERUN
+# NO ML RERUN
+# NO SHAP RERUN
+# =====================================================================
+
+import os
+import zipfile
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+from google.colab import files
+
+# =====================================================================
+# PATHS
+# =====================================================================
+
+RECURRENT_DIR = Path(
+    "/content/FINAL_THESIS_FIGURES_4_2_4_3_SVG"
+)
+
+OUT_DIR = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2_SEPARATE_SVG"
+)
+
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+CASE_FILE = (
+    RECURRENT_DIR /
+    "CASE_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+CONTROL_FILE = (
+    RECURRENT_DIR /
+    "CONTROL_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+# =====================================================================
+# INPUT VALIDATION
+# =====================================================================
+
+print("=" * 100)
+print("VALIDATING CORRECTED RECURRENT-SPECIES INPUTS")
+print("=" * 100)
+
+if not CASE_FILE.exists():
+    raise FileNotFoundError(
+        f"CASE recurrent LFC matrix not found:\n{CASE_FILE}"
+    )
+
+if not CONTROL_FILE.exists():
+    raise FileNotFoundError(
+        f"CONTROL recurrent LFC matrix not found:\n{CONTROL_FILE}"
+    )
+
+print("CASE matrix    :", CASE_FILE)
+print("CONTROL matrix :", CONTROL_FILE)
+
+# =====================================================================
+# DISEASE ORDER — SAME ORDER USED THROUGHOUT YOUR THESIS ANALYSIS
+# =====================================================================
+
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "Dwarfism",
+    "Ulcerative_Colitis",
+    "Fibromyalgia",
+    "IBS",
+    "Fatigue",
+    "Obesity",
+    "Neuroblastoma",
+    "COVID19"
+]
+
+DISPLAY = {
+    "Autism": "Autism",
+    "Colorectal_Neoplasm": "Colorectal neoplasm",
+    "Dwarfism": "Dwarfism",
+    "Ulcerative_Colitis": "Ulcerative colitis",
+    "Fibromyalgia": "Fibromyalgia",
+    "IBS": "IBS",
+    "Fatigue": "Fatigue",
+    "Obesity": "Obesity",
+    "Neuroblastoma": "Neuroblastoma",
+    "COVID19": "COVID-19"
+}
+
+# =====================================================================
+# LOAD MATRICES
+# =====================================================================
+
+case_raw = pd.read_csv(
+    CASE_FILE,
+    index_col=0
+)
+
+control_raw = pd.read_csv(
+    CONTROL_FILE,
+    index_col=0
+)
+
+print("\nRaw case matrix shape    :", case_raw.shape)
+print("Raw control matrix shape :", control_raw.shape)
+
+# =====================================================================
+# ROBUST MATRIX ORIENTATION
+# =====================================================================
+
+def prepare_matrix(
+    df,
+    expected_taxa,
+    label
+):
+
+    # ---------------------------------------------------------------
+    # Remove accidental whitespace from column names
+    # ---------------------------------------------------------------
+
+    df.columns = [
+        str(c).strip()
+        for c in df.columns
+    ]
+
+    # ---------------------------------------------------------------
+    # CASE 1:
+    # taxa × diseases
+    # ---------------------------------------------------------------
+
+    disease_columns = [
+        d for d in DISEASES
+        if d in df.columns
+    ]
+
+    if len(disease_columns) == 10:
+
+        result = df[
+            disease_columns
+        ].copy()
+
+        result.columns = DISEASES
+
+        print(
+            f"{label}: taxa × disease orientation VERIFIED"
+        )
+
+    else:
+
+        # -----------------------------------------------------------
+        # CASE 2:
+        # diseases × taxa
+        # -----------------------------------------------------------
+
+        index_values = [
+            str(x).strip()
+            for x in df.index
+        ]
+
+        disease_positions = {}
+
+        for disease in DISEASES:
+
+            if disease in index_values:
+
+                disease_positions[disease] = (
+                    index_values.index(disease)
+                )
+
+        if len(disease_positions) != 10:
+
+            raise ValueError(
+                f"\n{label}: Could not identify all 10 diseases."
+            )
+
+        selected_rows = [
+            df.index[
+                disease_positions[d]
+            ]
+            for d in DISEASES
+        ]
+
+        result = df.loc[
+            selected_rows
+        ].copy()
+
+        result.index = DISEASES
+
+        result = result.T
+
+        print(
+            f"{label}: disease × taxa orientation detected "
+            f"and corrected"
+        )
+
+    # ---------------------------------------------------------------
+    # Numeric conversion
+    # ---------------------------------------------------------------
+
+    result = result.apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    # ---------------------------------------------------------------
+    # Disease order
+    # ---------------------------------------------------------------
+
+    result = result.reindex(
+        columns=DISEASES
+    )
+
+    # ---------------------------------------------------------------
+    # Final dimensions
+    # ---------------------------------------------------------------
+
+    if result.shape != (
+        expected_taxa,
+        10
+    ):
+
+        raise ValueError(
+            f"\n{label} matrix has incorrect dimensions.\n"
+            f"Expected: {(expected_taxa, 10)}\n"
+            f"Found: {result.shape}"
+        )
+
+    # ---------------------------------------------------------------
+    # No duplicated taxa
+    # ---------------------------------------------------------------
+
+    if result.index.duplicated().any():
+
+        duplicated = result.index[
+            result.index.duplicated()
+        ].tolist()
+
+        raise ValueError(
+            f"{label}: duplicated microbial taxa found:\n"
+            f"{duplicated}"
+        )
+
+    return result
+
+
+# =====================================================================
+# PREPARE CASE / CONTROL MATRICES
+# =====================================================================
+
+case_lfc = prepare_matrix(
+    case_raw,
+    53,
+    "CASE"
+)
+
+control_lfc = prepare_matrix(
+    control_raw,
+    68,
+    "CONTROL"
+)
+
+# =====================================================================
+# FINAL INPUT QC
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("RECURRENT SPECIES INPUT QC")
+print("=" * 100)
+
+print(
+    f"Case-associated recurrent species    : "
+    f"{len(case_lfc)} | VERIFIED"
+)
+
+print(
+    f"Control-associated recurrent species : "
+    f"{len(control_lfc)} | VERIFIED"
+)
+
+print(
+    f"Case matrix shape    : {case_lfc.shape} | VERIFIED"
+)
+
+print(
+    f"Control matrix shape : {control_lfc.shape} | VERIFIED"
+)
+
+assert case_lfc.shape == (53, 10)
+assert control_lfc.shape == (68, 10)
+
+# =====================================================================
+# SAVE EXACT MATRICES USED
+# =====================================================================
+
+case_lfc.to_csv(
+    OUT_DIR /
+    "FIGURE_4_2e_CASE_RECURRENT_LFC_USED.csv"
+)
+
+control_lfc.to_csv(
+    OUT_DIR /
+    "FIGURE_4_2f_CONTROL_RECURRENT_LFC_USED.csv"
+)
+
+# =====================================================================
+# COMMON LFC SCALE
+# =====================================================================
+#
+# SAME SCALE FOR CASE AND CONTROL FIGURES
+# This makes the two biological directions directly comparable.
+# =====================================================================
+
+all_lfc = np.concatenate([
+    case_lfc.to_numpy().flatten(),
+    control_lfc.to_numpy().flatten()
+])
+
+all_lfc = all_lfc[
+    np.isfinite(all_lfc)
+]
+
+MAX_LFC = np.max(
+    np.abs(all_lfc)
+)
+
+if MAX_LFC == 0:
+    MAX_LFC = 1.0
+
+print(
+    f"\nCommon LFC colour scale:"
+    f" -{MAX_LFC:.3f} to +{MAX_LFC:.3f}"
+)
+
+# =====================================================================
+# SPLIT INTO TWO PARTS
+# =====================================================================
+
+case_split = int(
+    np.ceil(
+        len(case_lfc) / 2
+    )
+)
+
+control_split = int(
+    np.ceil(
+        len(control_lfc) / 2
+    )
+)
+
+case_part1 = case_lfc.iloc[
+    :case_split
+].copy()
+
+case_part2 = case_lfc.iloc[
+    case_split:
+].copy()
+
+control_part1 = control_lfc.iloc[
+    :control_split
+].copy()
+
+control_part2 = control_lfc.iloc[
+    control_split:
+].copy()
+
+print("\n" + "=" * 100)
+print("PARTITION QC")
+print("=" * 100)
+
+print(
+    f"4.2e Part I  : {len(case_part1)} species"
+)
+
+print(
+    f"4.2e Part II : {len(case_part2)} species"
+)
+
+print(
+    f"4.2f Part I  : {len(control_part1)} species"
+)
+
+print(
+    f"4.2f Part II : {len(control_part2)} species"
+)
+
+assert len(case_part1) + len(case_part2) == 53
+assert len(control_part1) + len(control_part2) == 68
+
+# =====================================================================
+# REFERENCE-STYLE HEATMAP FUNCTION
+# =====================================================================
+
+def make_reference_heatmap(
+    matrix,
+    filename,
+    panel_label,
+    main_title,
+    group_label
+):
+
+    # ---------------------------------------------------------------
+    # taxa × disease
+    #
+    # Convert to:
+    # disease × taxa
+    # ---------------------------------------------------------------
+
+    data = matrix.T
+
+    n_diseases = data.shape[0]
+    n_species = data.shape[1]
+
+    # ---------------------------------------------------------------
+    # VERY LARGE CANVAS
+    #
+    # 27 pt microbial labels require substantial horizontal space.
+    # ---------------------------------------------------------------
+
+    width = max(
+        28,
+        min(
+            58,
+            n_species * 1.35
+        )
+    )
+
+    height = 11.5
+
+    fig, ax = plt.subplots(
+        figsize=(
+            width,
+            height
+        )
+    )
+
+    # ---------------------------------------------------------------
+    # HEATMAP
+    # ---------------------------------------------------------------
+
+    image = ax.imshow(
+        data.values,
+        cmap="RdBu_r",
+        vmin=-MAX_LFC,
+        vmax=MAX_LFC,
+        aspect="auto",
+        interpolation="nearest"
+    )
+
+    # ---------------------------------------------------------------
+    # Y AXIS — DISEASES
+    # ---------------------------------------------------------------
+
+    ax.set_yticks(
+        np.arange(
+            n_diseases
+        )
+    )
+
+    ax.set_yticklabels(
+        [
+            DISPLAY[d]
+            for d in DISEASES
+        ],
+        fontsize=18,
+        fontweight="bold"
+    )
+
+    # ---------------------------------------------------------------
+    # X AXIS — MICROBIAL SPECIES
+    #
+    # 27 PT + BOLD
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            n_species
+        )
+    )
+
+    ax.set_xticklabels(
+        data.columns.astype(str),
+        fontsize=27,
+        fontweight="bold",
+        rotation=90,
+        ha="center",
+        va="top"
+    )
+
+    # ---------------------------------------------------------------
+    # BLACK TICK / CONNECTOR LINES
+    #
+    # These extend below the x-axis, reproducing the visual logic
+    # of the reference article.
+    # ---------------------------------------------------------------
+
+    ax.tick_params(
+        axis="x",
+        which="major",
+        bottom=True,
+        top=False,
+        direction="out",
+        length=16,
+        width=1.8,
+        colors="black",
+        pad=8
+    )
+
+    ax.tick_params(
+        axis="y",
+        which="major",
+        left=True,
+        right=False,
+        direction="out",
+        length=8,
+        width=1.5,
+        colors="black"
+    )
+
+    # ---------------------------------------------------------------
+    # BLACK BORDER AROUND EVERY CELL
+    #
+    # Minor grid lines are placed directly on cell boundaries.
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            -0.5,
+            n_species,
+            1
+        ),
+        minor=True
+    )
+
+    ax.set_yticks(
+        np.arange(
+            -0.5,
+            n_diseases,
+            1
+        ),
+        minor=True
+    )
+
+    ax.grid(
+        which="minor",
+        color="black",
+        linestyle="-",
+        linewidth=0.75
+    )
+
+    ax.tick_params(
+        which="minor",
+        bottom=False,
+        left=False
+    )
+
+    # ---------------------------------------------------------------
+    # KEEP THE MAIN AXES BORDER BLACK
+    # ---------------------------------------------------------------
+
+    for spine in ax.spines.values():
+
+        spine.set_visible(True)
+
+        spine.set_color("black")
+
+        spine.set_linewidth(1.4)
+
+    # ---------------------------------------------------------------
+    # Y AXIS TITLE
+    # ---------------------------------------------------------------
+
+    ax.set_ylabel(
+        "Disease",
+        fontsize=20,
+        fontweight="bold",
+        labelpad=20
+    )
+
+    # ---------------------------------------------------------------
+    # X AXIS TITLE
+    # ---------------------------------------------------------------
+
+    ax.set_xlabel(
+        group_label,
+        fontsize=20,
+        fontweight="bold",
+        labelpad=42
+    )
+
+    # ---------------------------------------------------------------
+    # PANEL LABEL
+    # ---------------------------------------------------------------
+
+    ax.text(
+        -0.075,
+        1.035,
+        panel_label,
+        transform=ax.transAxes,
+        fontsize=22,
+        fontweight="bold",
+        ha="left",
+        va="bottom"
+    )
+
+    # ---------------------------------------------------------------
+    # MAIN TITLE
+    # ---------------------------------------------------------------
+
+    ax.set_title(
+        main_title,
+        fontsize=23,
+        fontweight="bold",
+        pad=30
+    )
+
+    # ---------------------------------------------------------------
+    # COLORBAR
+    # ---------------------------------------------------------------
+
+    cbar = fig.colorbar(
+        image,
+        ax=ax,
+        fraction=0.025,
+        pad=0.025
+    )
+
+    cbar.set_label(
+        "log₂ fold change",
+        fontsize=18,
+        fontweight="bold",
+        labelpad=12
+    )
+
+    cbar.ax.tick_params(
+        labelsize=14,
+        width=1.2
+    )
+
+    # ---------------------------------------------------------------
+    # COLORBAR BORDER
+    # ---------------------------------------------------------------
+
+    cbar.outline.set_edgecolor(
+        "black"
+    )
+
+    cbar.outline.set_linewidth(
+        1.2
+    )
+
+    # ---------------------------------------------------------------
+    # LARGE LOWER MARGIN
+    #
+    # Allows 27 pt rotated microbial names + connector lines.
+    # ---------------------------------------------------------------
+
+    plt.subplots_adjust(
+        left=0.14,
+        right=0.955,
+        top=0.84,
+        bottom=0.48
+    )
+
+    # ---------------------------------------------------------------
+    # SAVE HIGH-RESOLUTION VECTOR SVG
+    # ---------------------------------------------------------------
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
+        bbox_inches="tight",
+        facecolor="white"
+    )
+
+    plt.close(fig)
+
+    print(
+        f"SAVED: {output}"
+    )
+
+
+# =====================================================================
+# FIGURE 4.2e — CASE ASSOCIATED
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("GENERATING FIGURE 4.2e")
+print("=" * 100)
+
+make_reference_heatmap(
+    case_part1,
+    "Figure_4_2e_CASE_Part_I.svg",
+    "e",
+    "Case-associated microbes shared by more than two diseases — Part I",
+    "Case-associated microbial species"
+)
+
+make_reference_heatmap(
+    case_part2,
+    "Figure_4_2e_CASE_Part_II.svg",
+    "e",
+    "Case-associated microbes shared by more than two diseases — Part II",
+    "Case-associated microbial species"
+)
+
+# =====================================================================
+# FIGURE 4.2f — CONTROL ASSOCIATED
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("GENERATING FIGURE 4.2f")
+print("=" * 100)
+
+make_reference_heatmap(
+    control_part1,
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "f",
+    "Control-associated microbes shared by more than two diseases — Part I",
+    "Control-associated microbial species"
+)
+
+make_reference_heatmap(
+    control_part2,
+    "Figure_4_2f_CONTROL_Part_II.svg",
+    "f",
+    "Control-associated microbes shared by more than two diseases — Part II",
+    "Control-associated microbial species"
+)
+
+# =====================================================================
+# VERIFY FOUR NEW SVGs
+# =====================================================================
+
+new_svg_files = [
+    "Figure_4_2e_CASE_Part_I.svg",
+    "Figure_4_2e_CASE_Part_II.svg",
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "Figure_4_2f_CONTROL_Part_II.svg"
+]
+
+print("\n" + "=" * 100)
+print("NEW SVG QC")
+print("=" * 100)
+
+for filename in new_svg_files:
+
+    path = OUT_DIR / filename
+
+    if not path.exists():
+
+        raise RuntimeError(
+            f"SVG NOT FOUND:\n{path}"
+        )
+
+    if path.stat().st_size < 1000:
+
+        raise RuntimeError(
+            f"SVG FILE IS SUSPICIOUSLY SMALL:\n{path}"
+        )
+
+    with open(
+        path,
+        "r",
+        encoding="utf-8",
+        errors="ignore"
+    ) as f:
+
+        header = f.read(
+            1000
+        ).lower()
+
+    if "<svg" not in header:
+
+        raise RuntimeError(
+            f"INVALID SVG:\n{path}"
+        )
+
+    print(
+        f"{filename:<55} VERIFIED"
+    )
+
+# =====================================================================
+# VERIFY EXISTING 4.2a–d
+# =====================================================================
+
+existing_svg_files = [
+    "Figure_4_2a_CASE.svg",
+    "Figure_4_2a_CONTROL.svg",
+    "Figure_4_2b_CASE.svg",
+    "Figure_4_2b_CONTROL.svg",
+    "Figure_4_2c_CASE.svg",
+    "Figure_4_2c_CONTROL.svg",
+    "Figure_4_2d_CASE.svg",
+    "Figure_4_2d_CONTROL.svg"
+]
+
+print("\n" + "=" * 100)
+print("VERIFYING EXISTING FIGURE 4.2a–d")
+print("=" * 100)
+
+for filename in existing_svg_files:
+
+    path = OUT_DIR / filename
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"\nExisting Figure 4.2a–d SVG missing:\n{path}\n"
+            f"Do not continue until the existing files are present."
+        )
+
+    print(
+        f"{filename:<45} FOUND"
+    )
+
+# =====================================================================
+# CREATE FINAL 12-SVG ZIP
+# =====================================================================
+
+all_figure_4_2_files = [
+    "Figure_4_2a_CASE.svg",
+    "Figure_4_2a_CONTROL.svg",
+
+    "Figure_4_2b_CASE.svg",
+    "Figure_4_2b_CONTROL.svg",
+
+    "Figure_4_2c_CASE.svg",
+    "Figure_4_2c_CONTROL.svg",
+
+    "Figure_4_2d_CASE.svg",
+    "Figure_4_2d_CONTROL.svg",
+
+    "Figure_4_2e_CASE_Part_I.svg",
+    "Figure_4_2e_CASE_Part_II.svg",
+
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "Figure_4_2f_CONTROL_Part_II.svg"
+]
+
+zip_path = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2_REFERENCE_STYLE_27PT.zip"
+)
+
+if zip_path.exists():
+
+    zip_path.unlink()
+
+with zipfile.ZipFile(
+    zip_path,
+    "w",
+    compression=zipfile.ZIP_DEFLATED
+) as z:
+
+    for filename in all_figure_4_2_files:
+
+        path = OUT_DIR / filename
+
+        if not path.exists():
+
+            raise RuntimeError(
+                f"Cannot add missing file to ZIP:\n{path}"
+            )
+
+        z.write(
+            path,
+            arcname=filename
+        )
+
+# =====================================================================
+# FINAL QC
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("FINAL FIGURE 4.2 QC")
+print("=" * 100)
+
+print(
+    "Case recurrent taxa        : 53 VERIFIED"
+)
+
+print(
+    "Control recurrent taxa     : 68 VERIFIED"
+)
+
+print(
+    "4.2e Part I + II           : VERIFIED"
+)
+
+print(
+    "4.2f Part I + II           : VERIFIED"
+)
+
+print(
+    "Black cell boundaries      : INCLUDED"
+)
+
+print(
+    "Black x-axis connector/ticks: INCLUDED"
+)
+
+print(
+    "Microbial species font     : 27 pt BOLD"
+)
+
+print(
+    "LFC colour scale           : BLUE → WHITE → RED"
+)
+
+print(
+    "SVG vector output          : VERIFIED"
+)
+
+print(
+    "DESeq2 rerun               : NO"
+)
+
+print(
+    "ML rerun                   : NO"
+)
+
+print(
+    "SHAP rerun                 : NO"
+)
+
+print("\nFINAL ZIP:")
+print(zip_path)
+
+# =====================================================================
+# DOWNLOAD
+# =====================================================================
+
+files.download(
+    str(zip_path)
+)
+
+
+
+
+
+
+
+
+
+
+# =====================================================================
+# FINAL FIGURE 4.2b–f
+# 27-PT BOLD MICROBIAL LABELS + REDUCED X-AXIS GAP
+# =====================================================================
+#
+# 4.2a is NOT changed.
+#
+# 4.2b = Fatigue vs Fibromyalgia
+# 4.2c = Dwarfism vs Fibromyalgia
+# 4.2d = COVID19 vs Dwarfism
+#
+# For each b–d:
+#     CASE   = separate SVG
+#     CONTROL = separate SVG
+#
+# 4.2e = recurrent case-associated microbes
+#     Part I  = SVG
+#     Part II = SVG
+#
+# 4.2f = recurrent control-associated microbes
+#     Part I  = SVG
+#     Part II = SVG
+#
+# MICROBE FONT:
+#     27 pt + BOLD
+#
+# X-AXIS:
+#     species labels close to axis
+#     pad = 2
+#     black connector/tick lines
+#
+# NO DESeq2 RERUN
+# NO ML RERUN
+# NO SHAP RERUN
+# =====================================================================
+
+import os
+import zipfile
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+from google.colab import files
+
+
+# =====================================================================
+# PATHS
+# =====================================================================
+
+TOP100_DIR = Path(
+    "/content/CORRECTED_DESEQ2_TOP100_REFERENCE_ALIGNED"
+)
+
+PAIR_DIR = Path(
+    "/content/FINAL_CORRECTED_REFERENCE_ALIGNED_DISEASE_PAIR_OVERLAP"
+)
+
+PAIR_FILE = (
+    PAIR_DIR /
+    "ALL_45_CORRECTED_DISEASE_PAIRS_OVERLAP.csv"
+)
+
+RECURRENT_DIR = Path(
+    "/content/FINAL_THESIS_FIGURES_4_2_4_3_SVG"
+)
+
+CASE_LFC_FILE = (
+    RECURRENT_DIR /
+    "CASE_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+CONTROL_LFC_FILE = (
+    RECURRENT_DIR /
+    "CONTROL_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+OUT_DIR = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2_SEPARATE_SVG"
+)
+
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# =====================================================================
+# DISEASE DISPLAY NAMES
+# =====================================================================
+
+DISPLAY = {
+    "Autism": "Autism",
+    "Colorectal_Neoplasm": "Colorectal neoplasm",
+    "Dwarfism": "Dwarfism",
+    "Ulcerative_Colitis": "Ulcerative colitis",
+    "Fibromyalgia": "Fibromyalgia",
+    "IBS": "IBS",
+    "Fatigue": "Fatigue",
+    "Obesity": "Obesity",
+    "Neuroblastoma": "Neuroblastoma",
+    "COVID19": "COVID-19"
+}
+
+
+# =====================================================================
+# VERIFY INPUTS
+# =====================================================================
+
+print("=" * 100)
+print("VERIFYING CORRECTED INPUTS")
+print("=" * 100)
+
+required_inputs = [
+    TOP100_DIR,
+    PAIR_FILE,
+    CASE_LFC_FILE,
+    CONTROL_LFC_FILE
+]
+
+for p in required_inputs:
+
+    if not p.exists():
+
+        raise FileNotFoundError(
+            f"\nREQUIRED INPUT NOT FOUND:\n{p}"
+        )
+
+    print(
+        f"{p} | VERIFIED"
+    )
+
+
+# =====================================================================
+# LOAD 45-PAIR OVERLAP RESULTS
+# =====================================================================
+
+pairs = pd.read_csv(
+    PAIR_FILE
+)
+
+required_pair_columns = [
+    "Disease_A",
+    "Disease_B",
+    "Disease_enriched_overlap_n",
+    "Healthy_enriched_overlap_n",
+    "Total_directional_overlap_n"
+]
+
+for col in required_pair_columns:
+
+    if col not in pairs.columns:
+
+        raise ValueError(
+            f"Required column missing from pair file: {col}"
+        )
+
+
+# =====================================================================
+# SELECT TOP 3 PAIRS FROM OUR CORRECTED RESULTS
+# =====================================================================
+
+top3 = (
+    pairs
+    .sort_values(
+        [
+            "Total_directional_overlap_n",
+            "Disease_enriched_overlap_n",
+            "Healthy_enriched_overlap_n"
+        ],
+        ascending=False
+    )
+    .head(3)
+    .reset_index(drop=True)
+)
+
+print("\n" + "=" * 100)
+print("TOP 3 PAIRS FROM CORRECTED RESULTS")
+print("=" * 100)
+
+print(
+    top3[
+        [
+            "Disease_A",
+            "Disease_B",
+            "Disease_enriched_overlap_n",
+            "Healthy_enriched_overlap_n",
+            "Total_directional_overlap_n"
+        ]
+    ].to_string(index=False)
+)
+
+
+# =====================================================================
+# EXPECTED TOP 3 — QC AGAINST ALREADY VERIFIED RESULT
+# =====================================================================
+
+expected_pairs = [
+    ("Fatigue", "Fibromyalgia"),
+    ("Dwarfism", "Fibromyalgia"),
+    ("COVID19", "Dwarfism")
+]
+
+actual_pairs = [
+    (
+        row["Disease_A"],
+        row["Disease_B"]
+    )
+    for _, row in top3.iterrows()
+]
+
+if actual_pairs != expected_pairs:
+
+    raise ValueError(
+        "\nTOP-3 PAIR SELECTION HAS CHANGED.\n"
+        f"Expected: {expected_pairs}\n"
+        f"Found: {actual_pairs}"
+    )
+
+print(
+    "\nTOP 3 PAIRS: VERIFIED"
+)
+
+
+# =====================================================================
+# LOAD TOP-100 CASE / CONTROL SIGNATURES
+# =====================================================================
+
+def load_top100(
+    disease,
+    group
+):
+
+    if group == "case":
+
+        filename = (
+            f"{disease}_TOP100_DISEASE_ENRICHED_CORRECTED.csv"
+        )
+
+    else:
+
+        filename = (
+            f"{disease}_TOP100_HEALTHY_ENRICHED_CORRECTED.csv"
+        )
+
+    path = TOP100_DIR / filename
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"\nTOP-100 FILE NOT FOUND:\n{path}"
+        )
+
+    df = pd.read_csv(
+        path
+    )
+
+    # ---------------------------------------------------------------
+    # Identify microbial species column robustly
+    # ---------------------------------------------------------------
+
+    possible_taxon_columns = [
+        "microbe",
+        "Microbe",
+        "taxa",
+        "Taxa",
+        "species",
+        "Species",
+        "feature",
+        "Feature"
+    ]
+
+    taxon_col = None
+
+    for col in possible_taxon_columns:
+
+        if col in df.columns:
+
+            taxon_col = col
+            break
+
+    if taxon_col is None:
+
+        # first column is normally the taxon column
+        taxon_col = df.columns[0]
+
+    taxa = (
+        df[taxon_col]
+        .astype(str)
+        .str.strip()
+    )
+
+    taxa = (
+        taxa[
+            taxa != ""
+        ]
+        .drop_duplicates()
+        .tolist()
+    )
+
+    if len(taxa) != 100:
+
+        raise ValueError(
+            f"{disease} {group}: "
+            f"expected 100 taxa, found {len(taxa)}"
+        )
+
+    return taxa
+
+
+# =====================================================================
+# TOP-100 QC
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("TOP-100 SIGNATURE QC")
+print("=" * 100)
+
+top100_cache = {}
+
+for disease in DISPLAY.keys():
+
+    top100_cache[
+        (disease, "case")
+    ] = load_top100(
+        disease,
+        "case"
+    )
+
+    top100_cache[
+        (disease, "control")
+    ] = load_top100(
+        disease,
+        "control"
+    )
+
+    print(
+        f"{disease:<25}"
+        f"Case=100 | Control=100 | VERIFIED"
+    )
+
+
+# =====================================================================
+# TOP-PAIR OVERLAP FUNCTION
+# =====================================================================
+
+def pair_overlap(
+    disease_a,
+    disease_b
+):
+
+    case_a = set(
+        top100_cache[
+            (disease_a, "case")
+        ]
+    )
+
+    case_b = set(
+        top100_cache[
+            (disease_b, "case")
+        ]
+    )
+
+    control_a = set(
+        top100_cache[
+            (disease_a, "control")
+        ]
+    )
+
+    control_b = set(
+        top100_cache[
+            (disease_b, "control")
+        ]
+    )
+
+    case_shared = sorted(
+        case_a.intersection(
+            case_b
+        )
+    )
+
+    control_shared = sorted(
+        control_a.intersection(
+            control_b
+        )
+    )
+
+    return (
+        case_shared,
+        control_shared
+    )
+
+
+# =====================================================================
+# COMMON LFC SCALE
+# =====================================================================
+
+case_raw = pd.read_csv(
+    CASE_LFC_FILE,
+    index_col=0
+)
+
+control_raw = pd.read_csv(
+    CONTROL_LFC_FILE,
+    index_col=0
+)
+
+case_raw.columns = [
+    str(c).strip()
+    for c in case_raw.columns
+]
+
+control_raw.columns = [
+    str(c).strip()
+    for c in control_raw.columns
+]
+
+
+# =====================================================================
+# ROBUST LFC MATRIX ORIENTATION
+# =====================================================================
+
+DISEASES = list(
+    DISPLAY.keys()
+)
+
+
+def prepare_lfc(
+    df,
+    expected_taxa,
+    label
+):
+
+    disease_columns = [
+        d for d in DISEASES
+        if d in df.columns
+    ]
+
+    if len(disease_columns) == 10:
+
+        result = df[
+            disease_columns
+        ].copy()
+
+        result.columns = DISEASES
+
+    else:
+
+        index_values = [
+            str(x).strip()
+            for x in df.index
+        ]
+
+        if not all(
+            d in index_values
+            for d in DISEASES
+        ):
+
+            raise ValueError(
+                f"{label}: cannot identify all 10 diseases."
+            )
+
+        result = df.loc[
+            DISEASES
+        ].copy()
+
+        result = result.T
+
+        result.columns = DISEASES
+
+    result = result.apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    result = result.reindex(
+        columns=DISEASES
+    )
+
+    if result.shape != (
+        expected_taxa,
+        10
+    ):
+
+        raise ValueError(
+            f"{label}: expected "
+            f"{expected_taxa} × 10, "
+            f"found {result.shape}"
+        )
+
+    return result
+
+
+case_lfc = prepare_lfc(
+    case_raw,
+    53,
+    "CASE"
+)
+
+control_lfc = prepare_lfc(
+    control_raw,
+    68,
+    "CONTROL"
+)
+
+
+# =====================================================================
+# COMMON COLOUR SCALE
+# =====================================================================
+
+all_lfc = np.concatenate([
+    case_lfc.values.flatten(),
+    control_lfc.values.flatten()
+])
+
+all_lfc = all_lfc[
+    np.isfinite(all_lfc)
+]
+
+MAX_LFC = np.max(
+    np.abs(all_lfc)
+)
+
+if MAX_LFC == 0:
+
+    MAX_LFC = 1
+
+
+# =====================================================================
+# FUNCTION: TOP-PAIR RANKING PLOT
+# =====================================================================
+#
+# This follows the meaning of the reference figure:
+#
+# x-axis = shared microbial taxa
+# y-axis = ranking in the two diseases
+#
+# CASE:
+#   salmon
+#
+# CONTROL:
+#   blue
+#
+# Smaller ranking = stronger enrichment.
+#
+# =====================================================================
+
+def make_pair_rank_plot(
+    disease_a,
+    disease_b,
+    group,
+    filename,
+    panel_label
+):
+
+    case_shared, control_shared = pair_overlap(
+        disease_a,
+        disease_b
+    )
+
+    if group == "case":
+
+        shared = case_shared
+
+        colour = "salmon"
+
+        group_text = "Case-associated"
+
+    else:
+
+        shared = control_shared
+
+        colour = "steelblue"
+
+        group_text = "Control-associated"
+
+
+    # ---------------------------------------------------------------
+    # Obtain rank for each shared taxon
+    # ---------------------------------------------------------------
+
+    if group == "case":
+
+        list_a = top100_cache[
+            (disease_a, "case")
+        ]
+
+        list_b = top100_cache[
+            (disease_b, "case")
+        ]
+
+    else:
+
+        list_a = top100_cache[
+            (disease_a, "control")
+        ]
+
+        list_b = top100_cache[
+            (disease_b, "control")
+        ]
+
+
+    rank_a = {
+        taxon: i + 1
+        for i, taxon in enumerate(list_a)
+    }
+
+    rank_b = {
+        taxon: i + 1
+        for i, taxon in enumerate(list_b)
+    }
+
+
+    taxa = list(shared)
+
+    y_a = [
+        rank_a[x]
+        for x in taxa
+    ]
+
+    y_b = [
+        rank_b[x]
+        for x in taxa
+    ]
+
+
+    # ---------------------------------------------------------------
+    # Large canvas
+    # ---------------------------------------------------------------
+
+    fig_width = max(
+        18,
+        len(taxa) * 0.75
+    )
+
+    fig_height = 12
+
+    fig, ax = plt.subplots(
+        figsize=(
+            fig_width,
+            fig_height
+        )
+    )
+
+
+    # ---------------------------------------------------------------
+    # Draw connecting lines
+    # ---------------------------------------------------------------
+
+    for i in range(
+        len(taxa)
+    ):
+
+        ax.plot(
+            [i, i],
+            [
+                y_a[i],
+                y_b[i]
+            ],
+            color="black",
+            linewidth=1.2,
+            zorder=1
+        )
+
+
+    # ---------------------------------------------------------------
+    # Disease A points
+    # ---------------------------------------------------------------
+
+    ax.scatter(
+        np.arange(
+            len(taxa)
+        ),
+        y_a,
+        s=120,
+        color=colour,
+        edgecolor="black",
+        linewidth=1.2,
+        zorder=3
+    )
+
+
+    # ---------------------------------------------------------------
+    # Disease B points
+    # ---------------------------------------------------------------
+
+    ax.scatter(
+        np.arange(
+            len(taxa)
+        ),
+        y_b,
+        s=120,
+        color=colour,
+        edgecolor="black",
+        linewidth=1.2,
+        zorder=3
+    )
+
+
+    # ---------------------------------------------------------------
+    # X-axis species names
+    # 27 pt BOLD
+    # CLOSE TO AXIS
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            len(taxa)
+        )
+    )
+
+    ax.set_xticklabels(
+        taxa,
+        rotation=90,
+        ha="center",
+        va="top",
+        fontsize=27,
+        fontweight="bold"
+    )
+
+    ax.tick_params(
+        axis="x",
+        which="major",
+        bottom=True,
+        top=False,
+        direction="out",
+        length=10,
+        width=1.8,
+        colors="black",
+        pad=2
+    )
+
+
+    # ---------------------------------------------------------------
+    # Y axis
+    # ---------------------------------------------------------------
+
+    ax.set_ylim(
+        105,
+        0
+    )
+
+    ax.set_ylabel(
+        "Microbial ranking",
+        fontsize=20,
+        fontweight="bold"
+    )
+
+
+    # ---------------------------------------------------------------
+    # Disease labels
+    # ---------------------------------------------------------------
+
+    ax.text(
+        -0.02,
+        0.98,
+        DISPLAY[disease_a],
+        transform=ax.transAxes,
+        fontsize=18,
+        fontweight="bold",
+        ha="right",
+        va="top"
+    )
+
+    ax.text(
+        -0.02,
+        0.05,
+        DISPLAY[disease_b],
+        transform=ax.transAxes,
+        fontsize=18,
+        fontweight="bold",
+        ha="right",
+        va="bottom"
+    )
+
+
+    # ---------------------------------------------------------------
+    # Title
+    # ---------------------------------------------------------------
+
+    ax.set_title(
+        f"{group_text} microbes shared between "
+        f"{DISPLAY[disease_a]} and "
+        f"{DISPLAY[disease_b]}",
+        fontsize=23,
+        fontweight="bold",
+        pad=25
+    )
+
+
+    # ---------------------------------------------------------------
+    # Panel label
+    # ---------------------------------------------------------------
+
+    ax.text(
+        -0.075,
+        1.035,
+        panel_label,
+        transform=ax.transAxes,
+        fontsize=22,
+        fontweight="bold"
+    )
+
+
+    # ---------------------------------------------------------------
+    # Grid
+    # ---------------------------------------------------------------
+
+    ax.grid(
+        axis="y",
+        linestyle="--",
+        linewidth=0.6,
+        alpha=0.4
+    )
+
+
+    # ---------------------------------------------------------------
+    # Black outer border
+    # ---------------------------------------------------------------
+
+    for spine in ax.spines.values():
+
+        spine.set_color("black")
+
+        spine.set_linewidth(1.4)
+
+
+    # ---------------------------------------------------------------
+    # Reduced lower spacing
+    # ---------------------------------------------------------------
+
+    plt.subplots_adjust(
+        left=0.16,
+        right=0.97,
+        top=0.84,
+        bottom=0.40
+    )
+
+
+    # ---------------------------------------------------------------
+    # SVG
+    # ---------------------------------------------------------------
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
+        bbox_inches="tight",
+        facecolor="white"
+    )
+
+    plt.close(fig)
+
+    print(
+        f"SAVED: {output} | n={len(taxa)}"
+    )
+
+
+# =====================================================================
+# 4.2b — TOP PAIR 1
+# =====================================================================
+
+pair1 = top3.iloc[0]
+
+make_pair_rank_plot(
+    pair1["Disease_A"],
+    pair1["Disease_B"],
+    "case",
+    "Figure_4_2b_CASE.svg",
+    "b"
+)
+
+make_pair_rank_plot(
+    pair1["Disease_A"],
+    pair1["Disease_B"],
+    "control",
+    "Figure_4_2b_CONTROL.svg",
+    "b"
+)
+
+
+# =====================================================================
+# 4.2c — TOP PAIR 2
+# =====================================================================
+
+pair2 = top3.iloc[1]
+
+make_pair_rank_plot(
+    pair2["Disease_A"],
+    pair2["Disease_B"],
+    "case",
+    "Figure_4_2c_CASE.svg",
+    "c"
+)
+
+make_pair_rank_plot(
+    pair2["Disease_A"],
+    pair2["Disease_B"],
+    "control",
+    "Figure_4_2c_CONTROL.svg",
+    "c"
+)
+
+
+# =====================================================================
+# 4.2d — TOP PAIR 3
+# =====================================================================
+
+pair3 = top3.iloc[2]
+
+make_pair_rank_plot(
+    pair3["Disease_A"],
+    pair3["Disease_B"],
+    "case",
+    "Figure_4_2d_CASE.svg",
+    "d"
+)
+
+make_pair_rank_plot(
+    pair3["Disease_A"],
+    pair3["Disease_B"],
+    "control",
+    "Figure_4_2d_CONTROL.svg",
+    "d"
+)
+
+
+# =====================================================================
+# 4.2e / 4.2f — RECURRENT SPECIES HEATMAPS
+# =====================================================================
+
+case_split = int(
+    np.ceil(
+        len(case_lfc) / 2
+    )
+)
+
+control_split = int(
+    np.ceil(
+        len(control_lfc) / 2
+    )
+)
+
+case_part1 = case_lfc.iloc[
+    :case_split
+]
+
+case_part2 = case_lfc.iloc[
+    case_split:
+]
+
+control_part1 = control_lfc.iloc[
+    :control_split
+]
+
+control_part2 = control_lfc.iloc[
+    control_split:
+]
+
+
+# =====================================================================
+# HEATMAP FUNCTION
+# =====================================================================
+
+def make_recurrent_heatmap(
+    matrix,
+    filename,
+    panel_label,
+    title,
+    x_label
+):
+
+    data = matrix.T
+
+    n_diseases = data.shape[0]
+
+    n_species = data.shape[1]
+
+
+    fig_width = max(
+        28,
+        min(
+            58,
+            n_species * 1.35
+        )
+    )
+
+    fig_height = 11.5
+
+
+    fig, ax = plt.subplots(
+        figsize=(
+            fig_width,
+            fig_height
+        )
+    )
+
+
+    # ---------------------------------------------------------------
+    # LFC heatmap
+    # ---------------------------------------------------------------
+
+    image = ax.imshow(
+        data.values,
+        cmap="RdBu_r",
+        vmin=-MAX_LFC,
+        vmax=MAX_LFC,
+        aspect="auto",
+        interpolation="nearest"
+    )
+
+
+    # ---------------------------------------------------------------
+    # Disease names
+    # ---------------------------------------------------------------
+
+    ax.set_yticks(
+        np.arange(
+            n_diseases
+        )
+    )
+
+    ax.set_yticklabels(
+        [
+            DISPLAY[d]
+            for d in DISEASES
+        ],
+        fontsize=18,
+        fontweight="bold"
+    )
+
+
+    # ---------------------------------------------------------------
+    # Microbial species
+    # 27 pt BOLD
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            n_species
+        )
+    )
+
+    ax.set_xticklabels(
+        data.columns.astype(str),
+        fontsize=27,
+        fontweight="bold",
+        rotation=90,
+        ha="center",
+        va="top"
+    )
+
+
+    # ---------------------------------------------------------------
+    # SHORT CONNECTOR/TICK LINE
+    # CLOSE TO X-AXIS
+    # ---------------------------------------------------------------
+
+    ax.tick_params(
+        axis="x",
+        which="major",
+        bottom=True,
+        top=False,
+        direction="out",
+        length=10,
+        width=1.8,
+        colors="black",
+        pad=2
+    )
+
+
+    # ---------------------------------------------------------------
+    # Disease tick lines
+    # ---------------------------------------------------------------
+
+    ax.tick_params(
+        axis="y",
+        which="major",
+        left=True,
+        right=False,
+        direction="out",
+        length=8,
+        width=1.5,
+        colors="black"
+    )
+
+
+    # ---------------------------------------------------------------
+    # BLACK BOUNDARY AROUND EACH BLOCK
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            -0.5,
+            n_species,
+            1
+        ),
+        minor=True
+    )
+
+    ax.set_yticks(
+        np.arange(
+            -0.5,
+            n_diseases,
+            1
+        ),
+        minor=True
+    )
+
+    ax.grid(
+        which="minor",
+        color="black",
+        linestyle="-",
+        linewidth=0.75
+    )
+
+    ax.tick_params(
+        which="minor",
+        bottom=False,
+        left=False
+    )
+
+
+    # ---------------------------------------------------------------
+    # Outer border
+    # ---------------------------------------------------------------
+
+    for spine in ax.spines.values():
+
+        spine.set_color("black")
+
+        spine.set_linewidth(1.4)
+
+
+    # ---------------------------------------------------------------
+    # Labels
+    # ---------------------------------------------------------------
+
+    ax.set_ylabel(
+        "Disease",
+        fontsize=20,
+        fontweight="bold",
+        labelpad=18
+    )
+
+    ax.set_xlabel(
+        x_label,
+        fontsize=20,
+        fontweight="bold",
+        labelpad=35
+    )
+
+
+    # ---------------------------------------------------------------
+    # Panel label
+    # ---------------------------------------------------------------
+
+    ax.text(
+        -0.075,
+        1.035,
+        panel_label,
+        transform=ax.transAxes,
+        fontsize=22,
+        fontweight="bold"
+    )
+
+
+    # ---------------------------------------------------------------
+    # Title
+    # ---------------------------------------------------------------
+
+    ax.set_title(
+        title,
+        fontsize=23,
+        fontweight="bold",
+        pad=28
+    )
+
+
+    # ---------------------------------------------------------------
+    # Colorbar
+    # ---------------------------------------------------------------
+
+    cbar = fig.colorbar(
+        image,
+        ax=ax,
+        fraction=0.025,
+        pad=0.025
+    )
+
+    cbar.set_label(
+        "log₂ fold change",
+        fontsize=18,
+        fontweight="bold"
+    )
+
+    cbar.ax.tick_params(
+        labelsize=14
+    )
+
+    cbar.outline.set_edgecolor(
+        "black"
+    )
+
+    cbar.outline.set_linewidth(
+        1.2
+    )
+
+
+    # ---------------------------------------------------------------
+    # REDUCED GAP BELOW X-AXIS
+    # ---------------------------------------------------------------
+
+    plt.subplots_adjust(
+        left=0.14,
+        right=0.955,
+        top=0.84,
+        bottom=0.40
+    )
+
+
+    # ---------------------------------------------------------------
+    # Save SVG
+    # ---------------------------------------------------------------
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
+        bbox_inches="tight",
+        facecolor="white"
+    )
+
+    plt.close(fig)
+
+    print(
+        f"SAVED: {output}"
+    )
+
+
+# =====================================================================
+# 4.2e
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("GENERATING 4.2e")
+print("=" * 100)
+
+make_recurrent_heatmap(
+    case_part1,
+    "Figure_4_2e_CASE_Part_I.svg",
+    "e",
+    "Case-associated microbes shared by more than two diseases — Part I",
+    "Case-associated microbial species"
+)
+
+make_recurrent_heatmap(
+    case_part2,
+    "Figure_4_2e_CASE_Part_II.svg",
+    "e",
+    "Case-associated microbes shared by more than two diseases — Part II",
+    "Case-associated microbial species"
+)
+
+
+# =====================================================================
+# 4.2f
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("GENERATING 4.2f")
+print("=" * 100)
+
+make_recurrent_heatmap(
+    control_part1,
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "f",
+    "Control-associated microbes shared by more than two diseases — Part I",
+    "Control-associated microbial species"
+)
+
+make_recurrent_heatmap(
+    control_part2,
+    "Figure_4_2f_CONTROL_Part_II.svg",
+    "f",
+    "Control-associated microbes shared by more than two diseases — Part II",
+    "Control-associated microbial species"
+)
+
+
+# =====================================================================
+# FINAL QC
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("FINAL FIGURE 4.2b–f QC")
+print("=" * 100)
+
+files_to_check = [
+
+    "Figure_4_2b_CASE.svg",
+    "Figure_4_2b_CONTROL.svg",
+
+    "Figure_4_2c_CASE.svg",
+    "Figure_4_2c_CONTROL.svg",
+
+    "Figure_4_2d_CASE.svg",
+    "Figure_4_2d_CONTROL.svg",
+
+    "Figure_4_2e_CASE_Part_I.svg",
+    "Figure_4_2e_CASE_Part_II.svg",
+
+    "Figure_4_2f_CONTROL_Part_I.svg",
+    "Figure_4_2f_CONTROL_Part_II.svg"
+]
+
+for filename in files_to_check:
+
+    path = OUT_DIR / filename
+
+    if not path.exists():
+
+        raise RuntimeError(
+            f"FIGURE NOT CREATED:\n{path}"
+        )
+
+    if path.stat().st_size < 1000:
+
+        raise RuntimeError(
+            f"SVG FILE TOO SMALL:\n{path}"
+        )
+
+    print(
+        f"{filename:<55} VERIFIED"
+    )
+
+
+# =====================================================================
+# ZIP
+# =====================================================================
+
+zip_path = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2b_to_4_2f_27PT_CLOSE_XAXIS.zip"
+)
+
+if zip_path.exists():
+
+    zip_path.unlink()
+
+
+with zipfile.ZipFile(
+    zip_path,
+    "w",
+    compression=zipfile.ZIP_DEFLATED
+) as z:
+
+    for filename in files_to_check:
+
+        z.write(
+            OUT_DIR / filename,
+            arcname=filename
+        )
+
+
+print("\n" + "=" * 100)
+print("COMPLETED")
+print("=" * 100)
+
+print(
+    "4.2b–4.2f microbial labels : 27 pt BOLD"
+)
+
+print(
+    "X-axis label gap           : REDUCED"
+)
+
+print(
+    "Black connector/tick lines : INCLUDED"
+)
+
+print(
+    "4.2e recurrent case taxa   : 53"
+)
+
+print(
+    "4.2f recurrent control taxa: 68"
+)
+
+print(
+    "SVG vector output          : VERIFIED"
+)
+
+print(
+    "DESeq2 rerun               : NO"
+)
+
+print(
+    "ML rerun                   : NO"
+)
+
+print(
+    "SHAP rerun                 : NO"
+)
+
+print(
+    "\nZIP:"
+)
+
+print(
+    zip_path
+)
+
+
+# =====================================================================
+# AUTOMATIC DOWNLOAD
+# =====================================================================
+
+files.download(
+    str(zip_path)
+)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# =====================================================================
+# FINAL FIGURE 4.2a–f
+# COMPLETE REFERENCE-ALIGNED THESIS FIGURE GENERATION
+# =====================================================================
+#
+# FIGURE 4.2:
+#
+#   4.2a CASE       -> separate SVG
+#   4.2a CONTROL    -> separate SVG
+#
+#   4.2b CASE       -> separate SVG
+#   4.2b CONTROL    -> separate SVG
+#
+#   4.2c CASE       -> separate SVG
+#   4.2c CONTROL    -> separate SVG
+#
+#   4.2d CASE       -> separate SVG
+#   4.2d CONTROL    -> separate SVG
+#
+#   4.2e CASE       -> Part 1 SVG
+#                    -> Part 2 SVG
+#
+#   4.2f CONTROL     -> Part 1 SVG
+#                    -> Part 2 SVG
+#
+# =====================================================================
+#
+# DATA:
+#   Corrected Top-100 DESeq2-derived signatures
+#   Corrected 45-pair overlap results
+#   Corrected recurrent-species LFC matrices
+#
+# NO DESeq2 RERUN
+# NO ML RERUN
+# NO SHAP RERUN
+#
+# =====================================================================
+
+import os
+import zipfile
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from google.colab import files
+
+
+# =====================================================================
+# 1. PATHS
+# =====================================================================
+
+TOP100_DIR = Path(
+    "/content/CORRECTED_DESEQ2_TOP100_REFERENCE_ALIGNED"
+)
+
+PAIR_FILE = Path(
+    "/content/FINAL_CORRECTED_REFERENCE_ALIGNED_DISEASE_PAIR_OVERLAP/"
+    "ALL_45_CORRECTED_DISEASE_PAIRS_OVERLAP.csv"
+)
+
+CASE_LFC_FILE = Path(
+    "/content/FINAL_THESIS_FIGURES_4_2_4_3_SVG/"
+    "CASE_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+CONTROL_LFC_FILE = Path(
+    "/content/FINAL_THESIS_FIGURES_4_2_4_3_SVG/"
+    "CONTROL_RECURRENT_SPECIES_LFC_MATRIX.csv"
+)
+
+OUT_DIR = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2_ALL_SEPARATE_SVG"
+)
+
+OUT_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+# =====================================================================
+# 2. DISEASES
+# =====================================================================
+
+DISEASES = [
+    "Autism",
+    "Colorectal_Neoplasm",
+    "Dwarfism",
+    "Ulcerative_Colitis",
+    "Fibromyalgia",
+    "IBS",
+    "Fatigue",
+    "Obesity",
+    "Neuroblastoma",
+    "COVID19"
+]
+
+DISPLAY = {
+    "Autism": "Autism",
+    "Colorectal_Neoplasm": "Colorectal neoplasm",
+    "Dwarfism": "Dwarfism",
+    "Ulcerative_Colitis": "Ulcerative colitis",
+    "Fibromyalgia": "Fibromyalgia",
+    "IBS": "IBS",
+    "Fatigue": "Fatigue",
+    "Obesity": "Obesity",
+    "Neuroblastoma": "Neuroblastoma",
+    "COVID19": "COVID-19"
+}
+
+
+# =====================================================================
+# 3. BASIC INPUT VERIFICATION
+# =====================================================================
+
+print("=" * 100)
+print("VERIFYING CORRECTED FIGURE 4.2 INPUTS")
+print("=" * 100)
+
+for path in [
+    TOP100_DIR,
+    PAIR_FILE,
+    CASE_LFC_FILE,
+    CONTROL_LFC_FILE
+]:
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"\nRequired corrected input not found:\n{path}"
+        )
+
+    print(
+        f"FOUND: {path}"
+    )
+
+
+# =====================================================================
+# 4. LOAD CORRECTED 45-PAIR RESULTS
+# =====================================================================
+
+pairs = pd.read_csv(
+    PAIR_FILE
+)
+
+required_pair_columns = [
+    "Disease_A",
+    "Disease_B",
+    "Disease_enriched_overlap_n",
+    "Healthy_enriched_overlap_n",
+    "Total_directional_overlap_n"
+]
+
+for col in required_pair_columns:
+
+    if col not in pairs.columns:
+
+        raise ValueError(
+            f"Required pair column missing:\n{col}"
+        )
+
+
+if len(pairs) != 45:
+
+    raise ValueError(
+        f"Expected 45 disease pairs, found {len(pairs)}"
+    )
+
+
+print(
+    "\n45 disease pairs: VERIFIED"
+)
+
+
+# =====================================================================
+# 5. FIND TOP-100 FILE
+# =====================================================================
+
+def find_top100_file(
+    disease,
+    group
+):
+
+    if group == "case":
+
+        keyword = "DISEASE_ENRICHED"
+
+    elif group == "control":
+
+        keyword = "HEALTHY_ENRICHED"
+
+    else:
+
+        raise ValueError(
+            "group must be case or control"
+        )
+
+    exact = TOP100_DIR / (
+        f"{disease}_TOP100_"
+        f"{keyword}_CORRECTED.csv"
+    )
+
+    if exact.exists():
+
+        return exact
+
+    candidates = list(
+        TOP100_DIR.glob(
+            f"{disease}_TOP100_*CORRECTED.csv"
+        )
+    )
+
+    candidates = [
+        p
+        for p in candidates
+        if keyword.lower() in p.name.lower()
+    ]
+
+    if len(candidates) == 1:
+
+        return candidates[0]
+
+    if len(candidates) == 0:
+
+        raise FileNotFoundError(
+            f"\nNo corrected {group} Top-100 file found for "
+            f"{disease}."
+        )
+
+    raise ValueError(
+        f"\nMultiple corrected files found for "
+        f"{disease} / {group}:\n"
+        + "\n".join(
+            str(x)
+            for x in candidates
+        )
+    )
+
+
+# =====================================================================
+# 6. IDENTIFY TAXON COLUMN
+# =====================================================================
+
+def identify_taxon_column(
+    df
+):
+
+    preferred = [
+        "name",
+        "taxon",
+        "Taxon",
+        "species",
+        "Species",
+        "microbe",
+        "Microbe",
+        "feature",
+        "Feature",
+        "microbial_species",
+        "Microbial_species"
+    ]
+
+    for col in preferred:
+
+        if col in df.columns:
+
+            return col
+
+    for col in df.columns:
+
+        if not pd.api.types.is_numeric_dtype(
+            df[col]
+        ):
+
+            return col
+
+    raise ValueError(
+        "Could not identify microbial species column.\n"
+        f"Columns: {list(df.columns)}"
+    )
+
+
+# =====================================================================
+# 7. LOAD TOP-100 SIGNATURE
+# =====================================================================
+
+signature_cache = {}
+
+
+def load_signature(
+    disease,
+    group
+):
+
+    key = (
+        disease,
+        group
+    )
+
+    if key in signature_cache:
+
+        return signature_cache[key]
+
+    filepath = find_top100_file(
+        disease,
+        group
+    )
+
+    df = pd.read_csv(
+        filepath
+    )
+
+    taxon_col = identify_taxon_column(
+        df
+    )
+
+    taxa = (
+        df[taxon_col]
+        .astype(str)
+        .str.strip()
+    )
+
+    taxa = taxa[
+        (taxa != "") &
+        (taxa.str.lower() != "nan")
+    ]
+
+    taxa = list(
+        dict.fromkeys(
+            taxa.tolist()
+        )
+    )
+
+    if len(taxa) != 100:
+
+        raise ValueError(
+            f"\n{disease} / {group}\n"
+            f"Expected 100 taxa.\n"
+            f"Found {len(taxa)}.\n"
+            f"File: {filepath}"
+        )
+
+    signature_cache[key] = taxa
+
+    return taxa
+
+
+# =====================================================================
+# 8. TOP-100 QC
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("TOP-100 QC")
+print("=" * 100)
+
+for disease in DISEASES:
+
+    case = load_signature(
+        disease,
+        "case"
+    )
+
+    control = load_signature(
+        disease,
+        "control"
+    )
+
+    print(
+        f"{disease:<25}"
+        f"Case={len(case)} | "
+        f"Control={len(control)} | VERIFIED"
+    )
+
+
+# =====================================================================
+# 9. BUILD 45-PAIR MATRICES DIRECTLY FROM CORRECTED TOP-100 FILES
+# =====================================================================
+
+case_matrix = pd.DataFrame(
+    0,
+    index=DISEASES,
+    columns=DISEASES,
+    dtype=int
+)
+
+control_matrix = pd.DataFrame(
+    0,
+    index=DISEASES,
+    columns=DISEASES,
+    dtype=int
+)
+
+for disease in DISEASES:
+
+    case_matrix.loc[
+        disease,
+        disease
+    ] = 100
+
+    control_matrix.loc[
+        disease,
+        disease
+    ] = 100
+
+
+for i in range(
+    len(DISEASES)
+):
+
+    for j in range(
+        i + 1,
+        len(DISEASES)
+    ):
+
+        a = DISEASES[i]
+        b = DISEASES[j]
+
+        case_overlap = len(
+            set(
+                load_signature(a, "case")
+            ).intersection(
+                load_signature(b, "case")
+            )
+        )
+
+        control_overlap = len(
+            set(
+                load_signature(a, "control")
+            ).intersection(
+                load_signature(b, "control")
+            )
+        )
+
+        case_matrix.loc[a, b] = case_overlap
+        case_matrix.loc[b, a] = case_overlap
+
+        control_matrix.loc[a, b] = control_overlap
+        control_matrix.loc[b, a] = control_overlap
+
+
+# =====================================================================
+# 10. CROSS-CHECK AGAINST SAVED CORRECTED 45-PAIR FILE
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("45-PAIR CROSS-CHECK")
+print("=" * 100)
+
+for _, row in pairs.iterrows():
+
+    a = row["Disease_A"]
+    b = row["Disease_B"]
+
+    expected_case = int(
+        row[
+            "Disease_enriched_overlap_n"
+        ]
+    )
+
+    expected_control = int(
+        row[
+            "Healthy_enriched_overlap_n"
+        ]
+    )
+
+    actual_case = int(
+        case_matrix.loc[a, b]
+    )
+
+    actual_control = int(
+        control_matrix.loc[a, b]
+    )
+
+    if actual_case != expected_case:
+
+        raise ValueError(
+            f"\nCASE OVERLAP MISMATCH\n"
+            f"{a} vs {b}\n"
+            f"Saved corrected = {expected_case}\n"
+            f"Calculated      = {actual_case}"
+        )
+
+    if actual_control != expected_control:
+
+        raise ValueError(
+            f"\nCONTROL OVERLAP MISMATCH\n"
+            f"{a} vs {b}\n"
+            f"Saved corrected = {expected_control}\n"
+            f"Calculated      = {actual_control}"
+        )
+
+
+print(
+    "45 case overlaps: VERIFIED"
+)
+
+print(
+    "45 control overlaps: VERIFIED"
+)
+
+
+# =====================================================================
+# 11. SAVE MATRIX QC FILES
+# =====================================================================
+
+case_matrix.to_csv(
+    OUT_DIR /
+    "Figure_4_2a_CASE_OVERLAP_MATRIX.csv"
+)
+
+control_matrix.to_csv(
+    OUT_DIR /
+    "Figure_4_2a_CONTROL_OVERLAP_MATRIX.csv"
+)
+
+
+# =====================================================================
+# 12. FIGURE 4.2a
+# =====================================================================
+
+def make_overlap_matrix(
+    matrix,
+    filename,
+    title
+):
+
+    n = len(
+        DISEASES
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(14, 13)
+    )
+
+    im = ax.imshow(
+        matrix.values,
+        cmap="Greys",
+        vmin=0,
+        vmax=100,
+        interpolation="nearest"
+    )
+
+    positions = np.arange(
+        n
+    )
+
+    ax.set_xticks(
+        positions
+    )
+
+    ax.set_yticks(
+        positions
+    )
+
+    ax.set_xticklabels(
+        [
+            DISPLAY[d]
+            for d in DISEASES
+        ],
+        fontsize=15,
+        fontweight="bold",
+        rotation=45,
+        ha="right"
+    )
+
+    ax.set_yticklabels(
+        [
+            DISPLAY[d]
+            for d in DISEASES
+        ],
+        fontsize=15,
+        fontweight="bold"
+    )
+
+    # Black cell boundaries
+    ax.set_xticks(
+        np.arange(
+            -0.5,
+            n,
+            1
+        ),
+        minor=True
+    )
+
+    ax.set_yticks(
+        np.arange(
+            -0.5,
+            n,
+            1
+        ),
+        minor=True
+    )
+
+    ax.grid(
+        which="minor",
+        color="black",
+        linewidth=0.9
+    )
+
+    ax.tick_params(
+        which="minor",
+        bottom=False,
+        left=False
+    )
+
+    # Numbers
+    for i in range(n):
+
+        for j in range(n):
+
+            value = int(
+                matrix.iloc[i, j]
+            )
+
+            if j <= i:
+
+                text_color = (
+                    "white"
+                    if value >= 55
+                    else "black"
+                )
+
+                ax.text(
+                    j,
+                    i,
+                    str(value),
+                    ha="center",
+                    va="center",
+                    fontsize=15,
+                    fontweight="bold",
+                    color=text_color
+                )
+
+    for spine in ax.spines.values():
+
+        spine.set_color("black")
+        spine.set_linewidth(1.5)
+
+    ax.set_title(
+        title,
+        fontsize=21,
+        fontweight="bold",
+        pad=20
+    )
+
+    cbar = fig.colorbar(
+        im,
+        ax=ax,
+        fraction=0.035,
+        pad=0.03
+    )
+
+    cbar.set_label(
+        "Number of overlapping microbes",
+        fontsize=15,
+        fontweight="bold"
+    )
+
+    cbar.ax.tick_params(
+        labelsize=13
+    )
+
+    plt.subplots_adjust(
+        left=0.29,
+        right=0.91,
+        top=0.88,
+        bottom=0.22
+    )
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
+        bbox_inches="tight",
+        facecolor="white"
+    )
+
+    plt.close(fig)
+
+    print(
+        f"SAVED: {output}"
+    )
+
+
+# 4.2a CASE
+make_overlap_matrix(
+    case_matrix,
+    "Figure_4_2a_CASE.svg",
+    "Overlap of case-associated microbes"
+)
+
+# 4.2a CONTROL
+make_overlap_matrix(
+    control_matrix,
+    "Figure_4_2a_CONTROL.svg",
+    "Overlap of control-associated microbes"
+)
+
+
+# =====================================================================
+# 13. SELECT TOP 3 PAIRS FROM CORRECTED RESULTS
+# =====================================================================
+
+top3 = (
+    pairs
+    .sort_values(
+        by=[
+            "Total_directional_overlap_n",
+            "Disease_enriched_overlap_n",
+            "Healthy_enriched_overlap_n"
+        ],
+        ascending=False
+    )
+    .head(3)
+    .reset_index(drop=True)
+)
+
+print("\n" + "=" * 100)
+print("TOP 3 CORRECTED PAIRS FOR 4.2b–d")
+print("=" * 100)
+
+print(
+    top3[
+        [
+            "Disease_A",
+            "Disease_B",
+            "Disease_enriched_overlap_n",
+            "Healthy_enriched_overlap_n",
+            "Total_directional_overlap_n"
+        ]
+    ].to_string(index=False)
+)
+
+
+# =====================================================================
+# 14. RANK FIGURE FOR 4.2b–d
+# =====================================================================
+
+def make_rank_figure(
+    disease_a,
+    disease_b,
+    group,
+    filename,
+    panel
+):
+
+    taxa_a = load_signature(
+        disease_a,
+        group
+    )
+
+    taxa_b = load_signature(
+        disease_b,
+        group
+    )
+
+    rank_a = {
+        taxon: i + 1
+        for i, taxon in enumerate(taxa_a)
+    }
+
+    rank_b = {
+        taxon: i + 1
+        for i, taxon in enumerate(taxa_b)
+    }
+
+    shared = [
+        taxon
+        for taxon in taxa_a
+        if taxon in rank_b
+    ]
+
+    ranks_a = [
+        rank_a[taxon]
+        for taxon in shared
+    ]
+
+    ranks_b = [
+        rank_b[taxon]
+        for taxon in shared
+    ]
+
+    n = len(shared)
+
+    if group == "case":
+
+        point_color = "salmon"
+        group_label = "Case-associated microbes"
+
+    else:
+
+        point_color = "steelblue"
+        group_label = "Control-associated microbes"
+
+    fig_width = max(
+        18,
+        n * 0.82
+    )
+
+    fig, ax = plt.subplots(
+        figsize=(
+            fig_width,
+            11
+        )
+    )
+
+    x = np.arange(n)
+
+    # ---------------------------------------------------------------
+    # LIGHT DOTTED VERTICAL MICROBE SEPARATORS
+    # ---------------------------------------------------------------
+
+    for xpos in x:
+
+        ax.axvline(
+            xpos,
+            color="lightgray",
+            linestyle=":",
+            linewidth=0.9,
+            alpha=0.9,
+            zorder=0
+        )
+
+    # ---------------------------------------------------------------
+    # BLACK RANK CONNECTIONS
+    # ---------------------------------------------------------------
+
+    for i in range(n):
+
+        ax.plot(
+            [x[i], x[i]],
+            [ranks_a[i], ranks_b[i]],
+            color="black",
+            linewidth=1.15,
+            linestyle="-",
+            zorder=2
+        )
+
+    # ---------------------------------------------------------------
+    # POINTS
+    # ---------------------------------------------------------------
+
+    ax.scatter(
+        x,
+        ranks_a,
+        s=115,
+        color=point_color,
+        edgecolor="black",
+        linewidth=0.9,
+        zorder=4
+    )
+
+    ax.scatter(
+        x,
+        ranks_b,
+        s=115,
+        color=point_color,
+        edgecolor="black",
+        linewidth=0.9,
+        zorder=4
+    )
+
+    # ---------------------------------------------------------------
+    # MICROBIAL NAMES
+    #
+    # 27 pt BOLD
+    # VERY CLOSE TO X-AXIS
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        x
+    )
+
+    ax.set_xticklabels(
+        shared,
+        fontsize=27,
+        fontweight="bold",
+        rotation=90,
+        ha="center",
+        va="top"
+    )
+
+    ax.tick_params(
+        axis="x",
+        which="major",
+        pad=-2,
+        length=5,
+        width=1.5
+    )
+
+    # ---------------------------------------------------------------
+    # Y AXIS
+    # ---------------------------------------------------------------
+
+    ax.set_ylabel(
+        "Microbe rank",
+        fontsize=20,
+        fontweight="bold"
+    )
+
+    ax.set_ylim(
+        105,
+        0
+    )
+
+    ax.set_yticks(
+        [1, 20, 40, 60, 80, 100]
+    )
+
+    ax.tick_params(
+        axis="y",
+        labelsize=16,
+        width=1.5
+    )
+
+    ax.grid(
+        axis="y",
+        color="lightgray",
+        linestyle=":",
+        linewidth=0.6,
+        alpha=0.55
+    )
+
+    # ---------------------------------------------------------------
+    # PANEL LETTER
+    # ---------------------------------------------------------------
+
+    ax.text(
+        -0.045,
+        1.025,
+        panel,
+        transform=ax.transAxes,
+        fontsize=24,
+        fontweight="bold",
+        ha="left",
+        va="bottom"
+    )
+
+    # ---------------------------------------------------------------
+    # DISEASE NAMES
+    # ---------------------------------------------------------------
+
+    ax.text(
+        0.01,
+        0.965,
+        DISPLAY[disease_a],
+        transform=ax.transAxes,
+        fontsize=19,
+        fontweight="bold",
+        ha="left",
+        va="top"
+    )
+
+    ax.text(
+        0.99,
+        0.965,
+        DISPLAY[disease_b],
+        transform=ax.transAxes,
+        fontsize=19,
+        fontweight="bold",
+        ha="right",
+        va="top"
+    )
+
+    ax.set_title(
+        group_label,
+        fontsize=21,
+        fontweight="bold",
+        pad=15
+    )
+
+    for spine in ax.spines.values():
+
+        spine.set_color("black")
+        spine.set_linewidth(1.4)
+
+    # IMPORTANT:
+    # bottom margin is deliberately controlled so the 27-pt
+    # microbial labels stay close to the axis.
+
+    plt.subplots_adjust(
+        left=0.10,
+        right=0.985,
+        top=0.84,
+        bottom=0.30
+    )
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
+        bbox_inches="tight",
+        facecolor="white"
+    )
+
+    plt.close(fig)
+
+    print(
+        f"SAVED: {output} | "
+        f"shared microbes = {n}"
+    )
+
+
+# =====================================================================
+# 15. FIGURE 4.2b
+# =====================================================================
+
+pair1 = top3.iloc[0]
+
+make_rank_figure(
+    pair1["Disease_A"],
+    pair1["Disease_B"],
+    "case",
+    "Figure_4_2b_CASE.svg",
+    "b"
+)
+
+make_rank_figure(
+    pair1["Disease_A"],
+    pair1["Disease_B"],
+    "control",
+    "Figure_4_2b_CONTROL.svg",
+    "b"
+)
+
+
+# =====================================================================
+# 16. FIGURE 4.2c
+# =====================================================================
+
+pair2 = top3.iloc[1]
+
+make_rank_figure(
+    pair2["Disease_A"],
+    pair2["Disease_B"],
+    "case",
+    "Figure_4_2c_CASE.svg",
+    "c"
+)
+
+make_rank_figure(
+    pair2["Disease_A"],
+    pair2["Disease_B"],
+    "control",
+    "Figure_4_2c_CONTROL.svg",
+    "c"
+)
+
+
+# =====================================================================
+# 17. FIGURE 4.2d
+# =====================================================================
+
+pair3 = top3.iloc[2]
+
+make_rank_figure(
+    pair3["Disease_A"],
+    pair3["Disease_B"],
+    "case",
+    "Figure_4_2d_CASE.svg",
+    "d"
+)
+
+make_rank_figure(
+    pair3["Disease_A"],
+    pair3["Disease_B"],
+    "control",
+    "Figure_4_2d_CONTROL.svg",
+    "d"
+)
+
+
+# =====================================================================
+# 18. LOAD RECURRENT LFC MATRIX ROBUSTLY
+# =====================================================================
+#
+# Expected biological structure:
+#
+#              Disease1 Disease2 ... Disease10
+# Microbe_1       LFC      LFC          LFC
+# Microbe_2       LFC      LFC          LFC
+# ...
+#
+# If the saved matrix happens to be transposed, this function detects
+# that and corrects orientation for plotting only.
+#
+# NO biological values are changed.
+# =====================================================================
+
+def load_recurrent_lfc_matrix(
+    filepath,
+    label
+):
+
+    df = pd.read_csv(
+        filepath
+    )
+
+    print("\n" + "=" * 100)
+    print(f"LOADING {label.upper()} RECURRENT LFC MATRIX")
+    print("=" * 100)
+
+    print(
+        f"File: {filepath}"
+    )
+
+    print(
+        f"Original shape: {df.shape}"
+    )
+
+    print(
+        f"Columns: {list(df.columns)}"
+    )
+
+    # ---------------------------------------------------------------
+    # Find disease columns
+    # ---------------------------------------------------------------
+
+    disease_columns = [
+        d
+        for d in DISEASES
+        if d in df.columns
+    ]
+
+    # ---------------------------------------------------------------
+    # Normal expected orientation:
+    # rows = microbial species
+    # columns = diseases
+    # ---------------------------------------------------------------
+
+    if len(disease_columns) >= 8:
+
+        taxon_candidates = [
+            c
+            for c in df.columns
+            if c not in disease_columns
+        ]
+
+        if len(taxon_candidates) == 0:
+
+            raise ValueError(
+                f"Could not identify species column "
+                f"in {filepath}"
+            )
+
+        taxon_col = taxon_candidates[0]
+
+        taxa = (
+            df[taxon_col]
+            .astype(str)
+            .str.strip()
+        )
+
+        matrix = df[
+            disease_columns
+        ].apply(
+            pd.to_numeric,
+            errors="coerce"
+        )
+
+        matrix.index = taxa
+
+        # Rename to the standard disease order
+        matrix = matrix.reindex(
+            columns=[
+                d
+                for d in DISEASES
+                if d in matrix.columns
+            ]
+        )
+
+    else:
+
+        # -----------------------------------------------------------
+        # Possible transposed structure:
+        #
+        # first column = Disease
+        # remaining columns = microbial taxa
+        # -----------------------------------------------------------
+
+        first_col = df.columns[0]
+
+        if (
+            df[first_col]
+            .astype(str)
+            .isin(DISEASES)
+            .sum()
+            >= 8
+        ):
+
+            df2 = df.set_index(
+                first_col
+            )
+
+            matrix = df2[
+                [
+                    c
+                    for c in df2.columns
+                ]
+            ].apply(
+                pd.to_numeric,
+                errors="coerce"
+            )
+
+            matrix = matrix.loc[
+                [
+                    d
+                    for d in DISEASES
+                    if d in matrix.index
+                ]
+            ].T
+
+            matrix.index.name = (
+                "Microbial_species"
+            )
+
+        else:
+
+            raise ValueError(
+                f"\nCould not determine orientation "
+                f"of recurrent LFC matrix:\n{filepath}\n\n"
+                f"Columns:\n{list(df.columns)}"
+            )
+
+    # ---------------------------------------------------------------
+    # Remove completely empty taxa
+    # ---------------------------------------------------------------
+
+    matrix = matrix.dropna(
+        how="all"
+    )
+
+    # ---------------------------------------------------------------
+    # Ensure exactly the disease columns available
+    # ---------------------------------------------------------------
+
+    matrix = matrix.reindex(
+        columns=[
+            d
+            for d in DISEASES
+            if d in matrix.columns
+        ]
+    )
+
+    if len(matrix.columns) != 10:
+
+        raise ValueError(
+            f"\nExpected LFC matrix with 10 diseases.\n"
+            f"Found columns:\n{list(matrix.columns)}"
+        )
+
+    print(
+        f"Final matrix shape: {matrix.shape}"
+    )
+
+    print(
+        f"Number of recurrent taxa: {len(matrix)}"
+    )
+
+    return matrix
+
+
+case_lfc = load_recurrent_lfc_matrix(
+    CASE_LFC_FILE,
+    "case"
+)
+
+control_lfc = load_recurrent_lfc_matrix(
+    CONTROL_LFC_FILE,
+    "control"
+)
+
+
+# =====================================================================
+# 19. RECURRENT SPECIES QC
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("RECURRENT SPECIES QC")
+print("=" * 100)
+
+print(
+    f"Case recurrent species: {len(case_lfc)}"
+)
+
+print(
+    f"Control recurrent species: {len(control_lfc)}"
+)
+
+if len(case_lfc) != 53:
+
+    raise ValueError(
+        f"Expected 53 recurrent case-associated species, "
+        f"found {len(case_lfc)}"
+    )
+
+if len(control_lfc) != 68:
+
+    raise ValueError(
+        f"Expected 68 recurrent control-associated species, "
+        f"found {len(control_lfc)}"
+    )
+
+print(
+    "Case recurrent species >=3 diseases: VERIFIED"
+)
+
+print(
+    "Control recurrent species >=3 diseases: VERIFIED"
+)
+
+
+# =====================================================================
+# 20. SAVE VERIFIED MATRICES USED
+# =====================================================================
+
+case_lfc.to_csv(
+    OUT_DIR /
+    "Figure_4_2e_CASE_RECURRENT_LFC_MATRIX_USED.csv"
+)
+
+control_lfc.to_csv(
+    OUT_DIR /
+    "Figure_4_2f_CONTROL_RECURRENT_LFC_MATRIX_USED.csv"
+)
+
+
+# =====================================================================
+# 21. RECURRENT LFC HEATMAP
+# =====================================================================
+#
+# IMPORTANT VISUAL CHANGES REQUESTED:
+#
+#   - 27 pt BOLD microbial names
+#   - labels extremely close to x-axis
+#   - black boundaries around every microbial block
+#   - small black connector/tick immediately beneath each label
+#   - clear individual microbial blocks
+#   - disease labels in bold
+#   - diverging LFC colour scale
+#
+# =====================================================================
+
+def make_recurrent_heatmap(
+    matrix,
+    filename,
+    title,
+    panel,
+    part_number,
+    total_parts,
+    group
+):
+
+    # ---------------------------------------------------------------
+    # Convert to numeric matrix
+    # ---------------------------------------------------------------
+
+    matrix = matrix.copy()
+
+    matrix = matrix.apply(
+        pd.to_numeric,
+        errors="coerce"
+    )
+
+    # ---------------------------------------------------------------
+    # Split already supplied matrix into this part
+    # ---------------------------------------------------------------
+
+    n_total = len(
+        matrix
+    )
+
+    split_size = int(
+        np.ceil(
+            n_total / total_parts
+        )
+    )
+
+    start = (
+        part_number - 1
+    ) * split_size
+
+    end = min(
+        start + split_size,
+        n_total
+    )
+
+    sub = matrix.iloc[
+        start:end
+    ].copy()
+
+    if len(sub) == 0:
+
+        raise ValueError(
+            f"No taxa available for "
+            f"{filename}"
+        )
+
+    # ---------------------------------------------------------------
+    # Remove all-NaN rows
+    # ---------------------------------------------------------------
+
+    sub = sub.dropna(
+        how="all"
+    )
+
+    taxa = [
+        str(x)
+        for x in sub.index
+    ]
+
+    values = sub.values.astype(
+        float
+    )
+
+    n_species = len(
+        taxa
+    )
+
+    n_diseases = len(
+        sub.columns
+    )
+
+    # ---------------------------------------------------------------
+    # Figure size
+    # ---------------------------------------------------------------
+
+    fig_width = max(
+        18,
+        n_species * 0.72
+    )
+
+    fig_height = 10.5
+
+    fig, ax = plt.subplots(
+        figsize=(
+            fig_width,
+            fig_height
+        )
+    )
+
+    # ---------------------------------------------------------------
+    # Symmetric colour range based on actual LFC data
+    # ---------------------------------------------------------------
+
+    finite_values = values[
+        np.isfinite(values)
+    ]
+
+    if len(finite_values) == 0:
+
+        raise ValueError(
+            f"No finite LFC values in {filename}"
+        )
+
+    vmax = np.nanmax(
+        np.abs(
+            finite_values
+        )
+    )
+
+    if vmax == 0:
+
+        vmax = 1
+
+    # ---------------------------------------------------------------
+    # HEATMAP
+    # ---------------------------------------------------------------
+
+    image = ax.imshow(
+        values.T,
+        aspect="auto",
+        cmap="RdBu_r",
+        vmin=-vmax,
+        vmax=vmax,
+        interpolation="nearest"
+    )
+
+    # ---------------------------------------------------------------
+    # X AXIS = MICROBES
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            n_species
+        )
+    )
+
+    ax.set_xticklabels(
+        taxa,
+        fontsize=27,
+        fontweight="bold",
+        rotation=90,
+        ha="center",
+        va="top"
+    )
+
+    # ===============================================================
+    # VERY IMPORTANT:
+    # PUT MICROBE NAMES DIRECTLY AGAINST THE X-AXIS
+    # ===============================================================
+
+    ax.tick_params(
+        axis="x",
+        which="major",
+        pad=-2,
+        length=5,
+        width=1.5
+    )
+
+    # ---------------------------------------------------------------
+    # X-axis disease rows
+    # ---------------------------------------------------------------
+
+    ax.set_yticks(
+        np.arange(
+            n_diseases
+        )
+    )
+
+    ax.set_yticklabels(
+        [
+            DISPLAY[d]
+            for d in sub.columns
+        ],
+        fontsize=15,
+        fontweight="bold"
+    )
+
+    # ---------------------------------------------------------------
+    # BLACK BLOCK BOUNDARIES
+    #
+    # Every microbial column gets a black boundary.
+    # ---------------------------------------------------------------
+
+    ax.set_xticks(
+        np.arange(
+            -0.5,
+            n_species,
+            1
+        ),
+        minor=True
+    )
+
+    ax.set_yticks(
+        np.arange(
+            -0.5,
+            n_diseases,
+            1
+        ),
+        minor=True
+    )
+
+    ax.grid(
+        which="minor",
+        color="black",
+        linewidth=0.8
+    )
+
+    ax.tick_params(
+        which="minor",
+        bottom=False,
+        left=False
+    )
+
+    # ---------------------------------------------------------------
+    # SMALL BLACK CONNECTOR/TICK LINE BELOW EACH MICROBE NAME
+    #
+    # This creates the short visible line connecting the microbial
+    # label to its x-axis position, as requested from the reference
+    # style.
+    # ---------------------------------------------------------------
+
+    for xpos in range(
+        n_species
+    ):
+
+        ax.plot(
+            [
+                xpos,
+                xpos
+            ],
+            [
+                -0.02,
+                -0.07
+            ],
+            transform=ax.get_xaxis_transform(),
+            color="black",
+            linewidth=1.2,
+            clip_on=False
+        )
+
+    # ---------------------------------------------------------------
+    # PANEL LABEL
+    # ---------------------------------------------------------------
+
+    ax.text(
+        -0.025,
+        1.025,
+        panel,
+        transform=ax.transAxes,
+        fontsize=24,
+        fontweight="bold",
+        ha="left",
+        va="bottom"
+    )
+
+    # ---------------------------------------------------------------
+    # PART LABEL
+    # ---------------------------------------------------------------
+
+    ax.text(
+        1.0,
+        1.025,
+        f"Part {part_number}/{total_parts}",
+        transform=ax.transAxes,
+        fontsize=15,
+        fontweight="bold",
+        ha="right",
+        va="bottom"
+    )
+
+    # ---------------------------------------------------------------
+    # TITLE
+    # ---------------------------------------------------------------
+
+    ax.set_title(
+        title,
+        fontsize=21,
+        fontweight="bold",
+        pad=16
+    )
+
+    # ---------------------------------------------------------------
+    # COLORBAR
+    # ---------------------------------------------------------------
+
+    cbar = fig.colorbar(
+        image,
+        ax=ax,
+        fraction=0.025,
+        pad=0.025
+    )
+
+    cbar.set_label(
+        "log2 fold change",
+        fontsize=16,
+        fontweight="bold"
+    )
+
+    cbar.ax.tick_params(
+        labelsize=13
+    )
+
+    # ---------------------------------------------------------------
+    # BLACK OUTER BORDER
+    # ---------------------------------------------------------------
+
+    for spine in ax.spines.values():
+
+        spine.set_color(
+            "black"
+        )
+
+        spine.set_linewidth(
+            1.4
+        )
+
+    # ===============================================================
+    # IMPORTANT LAYOUT:
+    #
+    # bottom margin deliberately reduced so the microbial names
+    # remain immediately below the x-axis rather than far away.
+    # ===============================================================
+
+    plt.subplots_adjust(
+        left=0.18,
+        right=0.94,
+        top=0.87,
+        bottom=0.30
+    )
+
+    # ---------------------------------------------------------------
+    # SAVE SVG
+    # ---------------------------------------------------------------
+
+    output = (
+        OUT_DIR /
+        filename
+    )
+
+    fig.savefig(
+        output,
+        format="svg",
+        bbox_inches="tight",
+        facecolor="white"
+    )
+
+    plt.close(
+        fig
+    )
+
+    print(
+        f"SAVED: {output}"
+    )
+
+    print(
+        f"    Taxa in part: {n_species}"
+    )
+
+
+# =====================================================================
+# 22. FIGURE 4.2e — CASE RECURRENT MICROBES
+#
+# 53 taxa -> two SVGs
+# =====================================================================
+
+make_recurrent_heatmap(
+    case_lfc,
+    "Figure_4_2e_CASE_Part_1.svg",
+    "Case-associated microbes shared by ≥3 diseases",
+    "e",
+    1,
+    2,
+    "case"
+)
+
+make_recurrent_heatmap(
+    case_lfc,
+    "Figure_4_2e_CASE_Part_2.svg",
+    "Case-associated microbes shared by ≥3 diseases",
+    "e",
+    2,
+    2,
+    "case"
+)
+
+
+# =====================================================================
+# 23. FIGURE 4.2f — CONTROL RECURRENT MICROBES
+#
+# 68 taxa -> two SVGs
+# =====================================================================
+
+make_recurrent_heatmap(
+    control_lfc,
+    "Figure_4_2f_CONTROL_Part_1.svg",
+    "Control-associated microbes shared by ≥3 diseases",
+    "f",
+    1,
+    2,
+    "control"
+)
+
+make_recurrent_heatmap(
+    control_lfc,
+    "Figure_4_2f_CONTROL_Part_2.svg",
+    "Control-associated microbes shared by ≥3 diseases",
+    "f",
+    2,
+    2,
+    "control"
+)
+
+
+# =====================================================================
+# 24. FINAL EXPECTED FILE LIST
+# =====================================================================
+
+expected_files = [
+
+    # 4.2a
+    "Figure_4_2a_CASE.svg",
+    "Figure_4_2a_CONTROL.svg",
+
+    # 4.2b
+    "Figure_4_2b_CASE.svg",
+    "Figure_4_2b_CONTROL.svg",
+
+    # 4.2c
+    "Figure_4_2c_CASE.svg",
+    "Figure_4_2c_CONTROL.svg",
+
+    # 4.2d
+    "Figure_4_2d_CASE.svg",
+    "Figure_4_2d_CONTROL.svg",
+
+    # 4.2e
+    "Figure_4_2e_CASE_Part_1.svg",
+    "Figure_4_2e_CASE_Part_2.svg",
+
+    # 4.2f
+    "Figure_4_2f_CONTROL_Part_1.svg",
+    "Figure_4_2f_CONTROL_Part_2.svg"
+]
+
+
+# =====================================================================
+# 25. FINAL FILE QC
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("FINAL FIGURE 4.2a–f QC")
+print("=" * 100)
+
+for filename in expected_files:
+
+    path = (
+        OUT_DIR /
+        filename
+    )
+
+    if not path.exists():
+
+        raise FileNotFoundError(
+            f"\nEXPECTED SVG NOT FOUND:\n{path}"
+        )
+
+    if path.stat().st_size < 1000:
+
+        raise ValueError(
+            f"\nSVG appears invalid/suspiciously small:\n{path}"
+        )
+
+    print(
+        f"{filename:<50} VERIFIED"
+    )
+
+
+# =====================================================================
+# 26. SAVE FINAL QC SUMMARY
+# =====================================================================
+
+qc_summary = pd.DataFrame({
+
+    "Figure": [
+        "4.2a CASE",
+        "4.2a CONTROL",
+        "4.2b CASE",
+        "4.2b CONTROL",
+        "4.2c CASE",
+        "4.2c CONTROL",
+        "4.2d CASE",
+        "4.2d CONTROL",
+        "4.2e CASE Part 1",
+        "4.2e CASE Part 2",
+        "4.2f CONTROL Part 1",
+        "4.2f CONTROL Part 2"
+    ],
+
+    "SVG_verified": [
+        True
+        for _ in expected_files
+    ]
+
+})
+
+qc_summary.to_csv(
+    OUT_DIR /
+    "FIGURE_4_2_FINAL_QC_SUMMARY.csv",
+    index=False
+)
+
+
+# =====================================================================
+# 27. CREATE ZIP
+# =====================================================================
+
+zip_path = Path(
+    "/content/FINAL_THESIS_FIGURE_4_2a_to_4_2f_ALL_SVG.zip"
+)
+
+if zip_path.exists():
+
+    zip_path.unlink()
+
+
+with zipfile.ZipFile(
+    zip_path,
+    "w",
+    compression=zipfile.ZIP_DEFLATED
+) as z:
+
+    for filename in expected_files:
+
+        filepath = (
+            OUT_DIR /
+            filename
+        )
+
+        z.write(
+            filepath,
+            arcname=filename
+        )
+
+
+# =====================================================================
+# 28. FINAL REPORT
+# =====================================================================
+
+print("\n" + "=" * 100)
+print("FIGURE 4.2a–f COMPLETED")
+print("=" * 100)
+
+print(
+    "\n4.2a = case/control overlap matrices"
+)
+
+print(
+    "4.2b = top corrected disease pair #1"
+)
+
+print(
+    "4.2c = top corrected disease pair #2"
+)
+
+print(
+    "4.2d = top corrected disease pair #3"
+)
+
+print(
+    "4.2e = recurrent case-associated microbes, split into 2 SVGs"
+)
+
+print(
+    "4.2f = recurrent control-associated microbes, split into 2 SVGs"
+)
+
+print(
+    "\nMicrobial font: 27 pt BOLD"
+)
+
+print(
+    "Microbial labels close to x-axis: YES"
+)
+
+print(
+    "e/f black microbial block boundaries: YES"
+)
+
+print(
+    "e/f short label-to-axis connector lines: YES"
+)
+
+print(
+    "b–d light dotted microbial separators: YES"
+)
+
+print(
+    "b–d black rank-connecting lines: YES"
+)
+
+print(
+    "Case colour: salmon"
+)
+
+print(
+    "Control colour: blue"
+)
+
+print(
+    "SVG vector output: VERIFIED"
+)
+
+print(
+    "DESeq2 rerun: NO"
+)
+
+print(
+    "ML rerun: NO"
+)
+
+print(
+    "SHAP rerun: NO"
+)
+
+print(
+    "\nOUTPUT DIRECTORY:"
+)
+
+print(
+    OUT_DIR
+)
+
+print(
+    "\nZIP:"
+)
+
+print(
+    zip_path
+)
+
+
+# =====================================================================
+# 29. AUTOMATIC ZIP DOWNLOAD
+# =====================================================================
+
+files.download(
+    str(zip_path)
+)
+
+
+
+
+
+
+
+
+
+
+
 
